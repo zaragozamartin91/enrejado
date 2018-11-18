@@ -12,7 +12,7 @@ from mininet.cli import CLI
 class ZgnFatTree(Topo):
 	""" Topologia fat-tree simple """
 
-	def __init__(self, tree_height = 3 , lhost_count = 2 , chost_count = 3 , **opts):
+	def __init__(self, tree_height = 3 , lhost_count = 1 , chost_count = 3 , **opts):
 		Topo.__init__(self , **opts)
 		# creo los switches
 		leaf_sws = self.build_switches(0, tree_height)
