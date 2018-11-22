@@ -21,27 +21,11 @@ switch_ids = set()
 # diccionario switch_id -> Switch (ver clase mas abajo)
 switches = dict()
 
+# Determinan / ajustan un tiempo de bloqueo de floods. 
+# Este tiempo se incrementara cada vez que se detecte un nuevo switch y un nuevo enlace
 FLOOD_DELAY_INCREMENT = 0
 _flood_delay = FLOOD_DELAY_INCREMENT
 
-# CONTROLLER FIREWALL ------------------------------------------------------------------------------------
-def block_handler (event):   
-  # Handles packet events and kills the ones with a blocked port number 
-  tcpp = event.parsed.find('tcp')   
-  if not tcpp: return # Not TCP   
-  if tcpp.srcport in block_ports or tcpp.dstport in block_ports:     
-  # Halt the event, stopping l2_learning from seeing it     
-  # (and installing a table entry for it)     
-    core.getLogger("blocker").debug("Blocked TCP %s <-> %s", tcpp.srcport, tcpp.dstport) 
-    event.halt = True 
- 
-def unblock (*ports):   
-  block_ports.difference_update(ports) 
- 
-def block (*ports): 
-  block_ports.update(ports)
-  
-  
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
 class ZgnLswitchFattree:
@@ -161,17 +145,18 @@ class Switch:
     tcp_pkt = packet.find('tcp')
     udp_pkt = packet.find('udp')
     
+    # LOS PAQUETES DESCONOCIDOS SON DROPEADOS 
     unknown_pkt = icmp_pkt is None and tcp_pkt is None and udp_pkt is None
-    
     if unknown_pkt:
-      log.info('PAQUETE DESCONOCIDO DETECTADO')
-      drop() # 2a
+      #log.info('PAQUETE DESCONOCIDO DETECTADO')
+      drop()
       return
       
     log.info('SWITCH_%s#PORT_%d -> PAQUETE TIPO %s MAC_ORIGEN: %s MAC_DESTINO: %s' % (self.switch_id,in_port,pkt_type_name,src_mac,dst_mac))
       
     self.mac_to_port[src_mac] = in_port
  
+    # TODO : MODIFICAR ESTE COMPORTAMIENTO PARA SOPORTAR ECMP
     # si el puerto de salida se encuentra en la tabla de MACs entonces instalo un flujo en el switch
     if dst_mac in self.mac_to_port:
       out_port = self.mac_to_port[dst_mac]
