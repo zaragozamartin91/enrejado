@@ -40,3 +40,16 @@ Es posible escuchar a todas las interfaces expuestas por los switches y hosts ut
 Para ello, agregarlo al comando de pox a ejecutar, ejemplo: `./pox/pox.py misc.zgn_lswitch_fattree log.level --DEBUG --packet=WARN web.webcore openflow.webservice openflow.debug`. 
 
 De esta manera, abriendo otra terminal y ejecutando `wireshark` (sin SUDO), se pueden escuchar a TODAS las interfaces de los enlaces establecidos entre los componentes.
+
+## Bugs de pox y mn detectados
+
+### Topologia con Switch 0
+
+Aparentemente a pox no le gusta mucho los switches con id que contengan el numero 0. Por lo cual el primer switch dentro de la topologia de arbol debe llamarse 's1' en vez de 's0'.
+
+### Quien debe correr primero, la topologia o el controlador?
+
+Si primero se corre un controlador con SPT y LUEGO se levanta la topologia fattree de mininet, entonces al correr el primer _PINGALL_ los hosts no podran contactarse todos entre si a la primera.
+
+Para evitar esto, se recomienda primero levantar la topologia de mn y LUEGO el controlador. Desafortunadamente mn escucha como controlador remoto a 127.0.0.1:6653 y POX por defecto se levanta en el puerto 6633 , por lo cual para poder correr PRIMERO mn y luego el controlador es necesario , o bien hacer que mn escuche a controladores remotos en el puerto 6633 mediante `--controller=remote,ip=127.0.0.1,port=6633` o bien se debe levantar al controlador de pox en el puerto 6653 mediante `openflow.of_01 --port=6653`.
+
