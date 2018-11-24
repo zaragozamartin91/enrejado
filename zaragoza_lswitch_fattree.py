@@ -46,6 +46,25 @@ def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_pat
       any_path_found = any_path_found or path_found
   return any_path_found
 
+# DEFINO FUNCIONES Y LISTENERS DE ESTADISTICAS DE SWITCHES PARA EVENTUALMENTE ARMAR EL FIREWALL -------------
+  
+def request_flow_stats(switch_id):
+  sw = switches[switch_id]
+  con = sw.connection
+  con.send(of.ofp_stats_request(body=of.ofp_flow_stats_request()))
+  
+# When we get flow stats, print stuff out
+def handle_flow_stats (event):
+  web_bytes = 0
+  web_flows = 0
+  for f in event.stats:
+    if f.match.tp_dst == 80 or f.match.tp_src == 80:
+      web_bytes += f.byte_count
+      web_flows += 1
+  log.info("Web traffic: %s bytes over %s flows", web_bytes, web_flows)
+
+
+
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
 class ZgnLswitchFattree:
@@ -53,7 +72,9 @@ class ZgnLswitchFattree:
     # Listen to dependencies
     def startup ():
       core.openflow.addListeners(self, priority=0)
-      core.openflow_discovery.addListeners(self)
+      core.openflow_discovery.addListeners(self)        
+      # Listen for flow stats
+      core.openflow.addListenerByName("FlowStatsReceived", handle_flow_stats)
       log.debug("ZgnLswitchFattree ESTA LISTO")
       
     core.call_when_ready(startup, ('openflow','openflow_discovery'))
@@ -111,7 +132,7 @@ class Switch:
     
     def install_flow(out_port):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
-      log.debug("installing flow for %s.%i -> %s.%i" % (src_mac, in_port, dst_mac, out_port))
+      log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i" % (self.switch_id,src_mac, in_port, dst_mac, out_port))
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match.from_packet(packet, in_port)
       msg.idle_timeout = 10
@@ -150,7 +171,7 @@ class Switch:
         # output all openflow ports except the input port and those with flooding disabled via the OFPPC_NO_FLOOD port config bit (generally, this is done for STP)
         msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
       else:
-        log.info("ESPERANDO FLOOD DE SWITCH %s , RESTAN %d SEGUNDOS" % (self.switch_id, int(_flood_delay - time_diff)))
+        log.debug("ESPERANDO FLOOD DE SWITCH %s , RESTAN %d SEGUNDOS" % (self.switch_id, int(_flood_delay - time_diff)))
       msg.data = packet_in
       msg.in_port = in_port
       self.connection.send(msg)
@@ -177,7 +198,7 @@ class Switch:
     def handle_dhcp():
       """ Maneja paquetes DHCP ... Pensar si acaso deberian dropearse... """
       dstip = ip_pkt.dstip
-      log.info('MANEJANDO PAQUETE DHCP HACIA IP %s' % str(dstip) )
+      log.debug('MANEJANDO PAQUETE DHCP HACIA IP %s' % str(dstip) )
       handle_all()
     
     def handle_udp():
@@ -185,14 +206,14 @@ class Switch:
       dstip = ip_pkt.dstip
       dstport = udp_pkt.dstport
       if dstport == DHCP_PORT : return handle_dhcp()
-      log.info('MANEJANDO PAQUETE UDP HACIA IP %s:%d' % (str(dstip),dstport) )
+      log.debug('MANEJANDO PAQUETE UDP HACIA IP %s:%d' % (str(dstip),dstport) )
       handle_all()
       
     
     # LOS PAQUETES DESCONOCIDOS SON DROPEADOS. POR AHORA IGNORAMOS LOS PAQUETES IPV6
     unknown_pkt = pkt_is_ipv6 or ( icmp_pkt is None and tcp_pkt is None and udp_pkt is None and not pkt_is_arp )
     if unknown_pkt:
-      #log.info('PAQUETE DESCONOCIDO DETECTADO')
+      #log.debug('PAQUETE DESCONOCIDO DETECTADO')
       drop()
       return
     
@@ -202,7 +223,7 @@ class Switch:
     if tcp_pkt : pkt_type_name = 'TCP'
     if udp_pkt : pkt_type_name = 'UDP'
     if pkt_is_arp : pkt_type_name = 'ARP'
-    log.info('SWITCH_%s#PORT_%d -> PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
+    log.debug('SWITCH_%s#PORT_%d -> PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
       (self.switch_id,in_port,eth_getNameForType,pkt_type_name,src_mac,dst_mac))
     
     # guardo la asociacion mac_origen -> puerto_entrada
@@ -234,6 +255,7 @@ def launch ():
   core.Interactive.variables['adj'] = adj
   core.Interactive.variables['switch_ids'] = switch_ids
   core.Interactive.variables['switches'] = switches
+  core.Interactive.variables['stats'] = request_flow_stats
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
   #timeout = min(max(PATH_SETUP_TIME, 5) * 2, 15)
