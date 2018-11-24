@@ -1,2 +1,3 @@
 #!/bin/bash
-pox/pox.py samples.spanning_tree
+pox/pox.py samples.spanning_tree log.level --packet=WARN
+
