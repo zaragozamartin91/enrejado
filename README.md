@@ -33,3 +33,10 @@ Por ejemplo, si quisieramos exponer un diccionario con todos los Switches del co
 `core.Interactive.variables['switches'] = switches` y luego del lado del CLI solicitar y afectar dicha variable haciendo referencia a su nombre __switches__.
 
 Para iniciar un controlador junto con el CLI, correr el modulo __py__ en la terminal junto con el resto de los modulos del controlador POX que deseamos correr: `./pox/pox.py misc.zgn_lswitch_fattree log.level --DEBUG --packet=WARN web.webcore openflow.webservice py`
+
+## Debug y Wireshark
+
+Es posible escuchar a todas las interfaces expuestas por los switches y hosts utilizando el modulo __openflow.debug__.
+Para ello, agregarlo al comando de pox a ejecutar, ejemplo: `./pox/pox.py misc.zgn_lswitch_fattree log.level --DEBUG --packet=WARN web.webcore openflow.webservice openflow.debug`. 
+
+De esta manera, abriendo otra terminal y ejecutando `wireshark` (sin SUDO), se pueden escuchar a TODAS las interfaces de los enlaces establecidos entre los componentes.
