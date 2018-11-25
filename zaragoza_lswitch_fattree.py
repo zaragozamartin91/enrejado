@@ -23,10 +23,19 @@ switches = dict()
 
 # Determinan / ajustan un tiempo de bloqueo de floods. 
 # Este tiempo se incrementara cada vez que se detecte un nuevo switch y un nuevo enlace
-FLOOD_DELAY_INCREMENT = 1
+FLOOD_DELAY_INCREMENT = 0
 _flood_delay = FLOOD_DELAY_INCREMENT
 
+# algunas constantes y numeros magicos utiles para debuguear
 DHCP_PORT = 67
+TCP_nw_proto = pkt.ipv4.TCP_PROTOCOL # 6
+UDP_nw_proto = pkt.ipv4.UDP_PROTOCOL # 17
+ICMP_nw_proto = pkt.ipv4.ICMP_PROTOCOL # 1
+
+IP_dl_type = pkt.ethernet.IP_TYPE # 2048
+
+# valor por defecto de duracion de un flujo instalado en un switch
+FLOW_INSTALL_DURATION = 30
 
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
@@ -51,17 +60,33 @@ def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_pat
 def request_flow_stats(switch_id):
   sw = switches[switch_id]
   con = sw.connection
-  con.send(of.ofp_stats_request(body=of.ofp_flow_stats_request()))
+  msg = of.ofp_stats_request(body=of.ofp_flow_stats_request())
+  con.send(msg)
+
+def request_udp_flow_stats(switch_id , udp_dst_port , udp_dst_ip):
+  sw = switches[switch_id]
+  con = sw.connection
+  req_body = of.ofp_flow_stats_request()
+  req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+  req_match.set_nw_dst(udp_dst_ip,32) # Sets the IP source address and the number of bits to match
+  req_body.match = req_match
+  msg = of.ofp_stats_request(body=req_body)
+  con.send(msg)
   
 # When we get flow stats, print stuff out
 def handle_flow_stats (event):
   web_bytes = 0
   web_flows = 0
+  packet_count = 0
+  switch_id = event.connection.dpid
+  # connection.dpid VEEER ESTOOO
   for f in event.stats:
-    if f.match.tp_dst == 80 or f.match.tp_src == 80:
+    is_udp = f.match.dl_type == pkt.ethernet.IP_TYPE and f.match.nw_proto == UDP_nw_proto
+    if is_udp:
       web_bytes += f.byte_count
       web_flows += 1
-  log.info("Web traffic: %s bytes over %s flows", web_bytes, web_flows)
+      packet_count += f.packet_count
+  log.info("SWITCH_%s traffic: %s bytes over %s flows with %s packets", switch_id, web_bytes, web_flows, packet_count)
 
 
 
@@ -130,13 +155,13 @@ class Switch:
     dst_mac = packet.dst # MAC destino del paquete
     in_port = packet_in.in_port # puerto de switch por donde ingreso el paquete
     
-    def install_flow(out_port):
+    def install_flow(out_port , duration = FLOW_INSTALL_DURATION):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
       log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i" % (self.switch_id,src_mac, in_port, dst_mac, out_port))
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match.from_packet(packet, in_port)
-      msg.idle_timeout = 10
-      msg.hard_timeout = 30
+      msg.idle_timeout = duration
+      msg.hard_timeout = duration
       msg.actions.append(of.ofp_action_output(port = out_port))
       msg.data = packet_in
       self.connection.send(msg)
@@ -168,7 +193,7 @@ class Switch:
       if flood_ok:
         # Realizar flood solo despues de que venza el tiempo de prevencion de flood
         log.debug("SWITCH_%i: FLOOD %s -> %s", self.switch_id,src_mac,dst_mac)
-        # output all openflow ports except the input port and those with flooding disabled via the OFPPC_NO_FLOOD port config bit (generally, this is done for STP)
+        # Hacemos flood por todos los puertos excepto los bloqueados por el SPT
         msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
       else:
         log.debug("ESPERANDO FLOOD DE SWITCH %s , RESTAN %d SEGUNDOS" % (self.switch_id, int(_flood_delay - time_diff)))
@@ -256,6 +281,7 @@ def launch ():
   core.Interactive.variables['switch_ids'] = switch_ids
   core.Interactive.variables['switches'] = switches
   core.Interactive.variables['stats'] = request_flow_stats
+  core.Interactive.variables['udp_stats'] = request_udp_flow_stats
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
   #timeout = min(max(PATH_SETUP_TIME, 5) * 2, 15)
