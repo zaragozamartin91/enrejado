@@ -35,7 +35,7 @@ ICMP_nw_proto = pkt.ipv4.ICMP_PROTOCOL # 1
 IP_dl_type = pkt.ethernet.IP_TYPE # 2048
 
 # valor por defecto de duracion de un flujo instalado en un switch
-FLOW_INSTALL_DURATION = 30
+FLOW_INSTALL_DURATION = 10
 # Cantidad de paquetes UDP hacia un mismo destino que determinan la instalacion del FIREWALL
 UDP_FIREWALL_THRESHOLD = 100
 # Determina si se debe tener en cuenta el puerto destino udp para activar el FIREWALL
@@ -61,12 +61,9 @@ def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_pat
 
 # DEFINO FUNCIONES Y LISTENERS DE ESTADISTICAS DE SWITCHES PARA EVENTUALMENTE ARMAR EL FIREWALL -------------
   
-def request_flow_stats(switch_id):
-  sw = switches[switch_id]
-  con = sw.connection
-  msg = of.ofp_stats_request(body=of.ofp_flow_stats_request())
-  con.send(msg)
 
+"""
+EJEMPLO DE FUNCION QUE SOLICITA DATOS ESTADISTICOS PARA UN FLUJO ESPECIFICO
 def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port):
   sw = switches[switch_id]
   con = sw.connection
@@ -80,35 +77,73 @@ def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port):
   req_body.match = req_match
   msg = of.ofp_stats_request(body=req_body)
   con.send(msg)
-  
-# When we get flow stats, print stuff out
-def handle_flow_stats (event):
-  web_bytes = 0
-  web_flows = 0
-  packet_count = 0
-  switch_id = event.connection.dpid
-  udp_stats = []
-  for f in event.stats:
-    is_udp = f.match.dl_type == pkt.ethernet.IP_TYPE and f.match.nw_proto == UDP_nw_proto
-    if is_udp: udp_stats.append(f)
-  handle_udp_stats(switch_id , udp_stats)
+"""
 
-def handle_udp_stats(switch_id , udp_stats):
-  packet_count = 0
-  for f in udp_stats:
-    packet_count += f.packet_count
-  if packet_count > UDP_FIREWALL_THRESHOLD: 
-    log.info('SE DEBE REALIZAR BLACKHOLE DE PAQUETES!')
-  log.info("SWITCH_%s traffic: %s bytes over %s flows with %s packets", switch_id, packet_count)
+def request_flow_stats(switch_id):
+  sw = switches[switch_id]
+  con = sw.connection
+  msg = of.ofp_stats_request(body=of.ofp_flow_stats_request())
+  con.send(msg)
+
+# Funciones para determinar tipo de flujo / estadistica a partir de un objeto ofp_match
+def is_udp(match):
+  return match.dl_type == pkt.ethernet.IP_TYPE and match.nw_proto == UDP_nw_proto
   
-def blackhole_udp_packets (switch_id , duration , udp_dst_port , udp_dst_ip):
+def is_tcp(match):
+  return match.dl_type == pkt.ethernet.IP_TYPE and match.nw_proto == TCP_nw_proto
+  
+def is_icmp(match):
+  return match.dl_type == pkt.ethernet.IP_TYPE and match.nw_proto == ICMP_nw_proto
+  
+  
+def handle_flow_stats (event):
+  """ Listener que muestra datos estadisticos de un switch. Captura eventos FlowStatsReceived """
+  switch_id = event.connection.dpid
+  all_stats = { 
+    "tcp":{"packet_count":0 , "byte_count":0} , 
+    "udp":{"packet_count":0 , "byte_count":0} , 
+    "icmp":{"packet_count":0 , "byte_count":0} }
+  for f in event.stats:
+    if is_udp(f.match): 
+      all_stats["udp"]["packet_count"] += f.packet_count
+      all_stats["udp"]["byte_count"] += f.byte_count
+    
+    if is_tcp(f.match):
+      all_stats["tcp"]["packet_count"] += f.packet_count
+      all_stats["tcp"]["byte_count"] += f.byte_count
+      
+    if is_icmp(f.match):
+      all_stats["icmp"]["packet_count"] += f.packet_count
+      all_stats["icmp"]["byte_count"] += f.byte_count
+  log.info("SWITCH_%s stats: %s" , switch_id , all_stats)
+  
+def handle_flow_removed(event):
+  """ Listener que maneja eliminaciones de flujos en switches. Escucha eventos tipo FlowRemoved """
+  switch_id = event.connection.dpid
+  log.info('SWITCH_%s: FLUJO REMOVIDO!' , switch_id)
+  match = event.ofp.match
+
+  if is_udp(match): 
+    dst_ip = match.get_nw_dst() # Tupla IP , bits_mascara. Ejemplo: (IPAddr('10.0.0.2'), 32)
+    packet_count = event.ofp.packet_count
+    log.info('SWITCH_%s: FLUJO REMOVIDO ES UDP PARA IP %s' , switch_id, dst_ip)
+    if packet_count > UDP_FIREWALL_THRESHOLD: 
+      blackhole_udp_packets(switch_id , FLOW_INSTALL_DURATION , dst_ip)
+
+def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None):
   """ Instala un flujo de dopeo de paquetes UDP para un destino determinado """
+  # NOTA: ESTA FUNCION INSTALA UN FIREWALL TIPO BLACKHOLE EN UN SOLO SWITCH... SE DEBE CONSIDERAR SI ACASO EL FIREWALL
+  # DEBE INSTALARSE EN TODOS LOS SWITCHES...
+  log.info('SWITCH_%s: REALIZANDO BLACKHOLE DE PAQUETES HACIA %s ' , switch_id , udp_dst_ip[0] )
   msg = of.ofp_flow_mod()
-  msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
-  msg.match.set_nw_dst(udp_dst_ip,32)
+  if USE_UDP_PORT_FOR_FIREWALL:
+    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+  else:
+    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
+  msg.match.set_nw_dst( str(udp_dst_ip[0]) , udp_dst_ip[1])
   msg.idle_timeout = duration
   msg.hard_timeout = duration
-  msg.buffer_id = packet_in.buffer_id
+  # msg.buffer_id = packet_in.buffer_id
   switches[switch_id].connection.send(msg)
 
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
@@ -121,6 +156,7 @@ class ZgnLswitchFattree:
       core.openflow_discovery.addListeners(self)        
       # Listen for flow stats
       core.openflow.addListenerByName("FlowStatsReceived", handle_flow_stats)
+      core.openflow.addListenerByName("FlowRemoved", handle_flow_removed)
       log.debug("ZgnLswitchFattree ESTA LISTO")
       
     core.call_when_ready(startup, ('openflow','openflow_discovery'))
@@ -185,6 +221,9 @@ class Switch:
       msg.hard_timeout = duration
       msg.actions.append(of.ofp_action_output(port = out_port))
       msg.data = packet_in
+      # esta linea es mucho muy importante dado que indica al switch que debe notificar al controlador cuando un flujo haya
+      # sido dado de baja. Ver funcion handle_flow_removed
+      msg.flags = of.OFPFF_SEND_FLOW_REM
       self.connection.send(msg)
       
     def drop (duration = None):
@@ -302,7 +341,6 @@ def launch ():
   core.Interactive.variables['switch_ids'] = switch_ids
   core.Interactive.variables['switches'] = switches
   core.Interactive.variables['stats'] = request_flow_stats
-  core.Interactive.variables['udp_stats'] = request_udp_flow_stats
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
   #timeout = min(max(PATH_SETUP_TIME, 5) * 2, 15)
