@@ -36,6 +36,10 @@ IP_dl_type = pkt.ethernet.IP_TYPE # 2048
 
 # valor por defecto de duracion de un flujo instalado en un switch
 FLOW_INSTALL_DURATION = 30
+# Cantidad de paquetes UDP hacia un mismo destino que determinan la instalacion del FIREWALL
+UDP_FIREWALL_THRESHOLD = 100
+# Determina si se debe tener en cuenta el puerto destino udp para activar el FIREWALL
+USE_UDP_PORT_FOR_FIREWALL = False
 
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
@@ -63,11 +67,15 @@ def request_flow_stats(switch_id):
   msg = of.ofp_stats_request(body=of.ofp_flow_stats_request())
   con.send(msg)
 
-def request_udp_flow_stats(switch_id , udp_dst_port , udp_dst_ip):
+def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port):
   sw = switches[switch_id]
   con = sw.connection
   req_body = of.ofp_flow_stats_request()
-  req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+  req_match = None
+  if USE_UDP_PORT_FOR_FIREWALL: 
+    req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+  else: 
+    req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
   req_match.set_nw_dst(udp_dst_ip,32) # Sets the IP source address and the number of bits to match
   req_body.match = req_match
   msg = of.ofp_stats_request(body=req_body)
@@ -79,16 +87,29 @@ def handle_flow_stats (event):
   web_flows = 0
   packet_count = 0
   switch_id = event.connection.dpid
-  # connection.dpid VEEER ESTOOO
+  udp_stats = []
   for f in event.stats:
     is_udp = f.match.dl_type == pkt.ethernet.IP_TYPE and f.match.nw_proto == UDP_nw_proto
-    if is_udp:
-      web_bytes += f.byte_count
-      web_flows += 1
-      packet_count += f.packet_count
-  log.info("SWITCH_%s traffic: %s bytes over %s flows with %s packets", switch_id, web_bytes, web_flows, packet_count)
+    if is_udp: udp_stats.append(f)
+  handle_udp_stats(switch_id , udp_stats)
 
-
+def handle_udp_stats(switch_id , udp_stats):
+  packet_count = 0
+  for f in udp_stats:
+    packet_count += f.packet_count
+  if packet_count > UDP_FIREWALL_THRESHOLD: 
+    log.info('SE DEBE REALIZAR BLACKHOLE DE PAQUETES!')
+  log.info("SWITCH_%s traffic: %s bytes over %s flows with %s packets", switch_id, packet_count)
+  
+def blackhole_udp_packets (switch_id , duration , udp_dst_port , udp_dst_ip):
+  """ Instala un flujo de dopeo de paquetes UDP para un destino determinado """
+  msg = of.ofp_flow_mod()
+  msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+  msg.match.set_nw_dst(udp_dst_ip,32)
+  msg.idle_timeout = duration
+  msg.hard_timeout = duration
+  msg.buffer_id = packet_in.buffer_id
+  switches[switch_id].connection.send(msg)
 
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
