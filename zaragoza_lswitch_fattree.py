@@ -10,6 +10,7 @@ import pox.lib.packet as pkt
 import time
 from pox.lib.util import dpid_to_str
 
+
 block_ports = set() 
 log = core.getLogger()
 
@@ -126,7 +127,7 @@ def handle_flow_removed(event):
   if is_udp(match): 
     dst_ip = match.get_nw_dst() # Tupla IP , bits_mascara. Ejemplo: (IPAddr('10.0.0.2'), 32)
     packet_count = event.ofp.packet_count
-    log.info('SWITCH_%s: FLUJO REMOVIDO ES UDP PARA IP %s' , switch_id, dst_ip)
+    log.info('SWITCH_%s: FLUJO REMOVIDO ES DE TIPO UDP CON DESTINO IP %s' , switch_id, dst_ip)
     if packet_count > UDP_FIREWALL_THRESHOLD: 
       blackhole_udp_packets(switch_id , FLOW_INSTALL_DURATION , dst_ip)
 
@@ -134,7 +135,7 @@ def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None
   """ Instala un flujo de dopeo de paquetes UDP para un destino determinado """
   # NOTA: ESTA FUNCION INSTALA UN FIREWALL TIPO BLACKHOLE EN UN SOLO SWITCH... SE DEBE CONSIDERAR SI ACASO EL FIREWALL
   # DEBE INSTALARSE EN TODOS LOS SWITCHES...
-  log.info('SWITCH_%s: REALIZANDO BLACKHOLE DE PAQUETES HACIA %s ' , switch_id , udp_dst_ip[0] )
+  log.info('SWITCH_%s: INSTALANDO FIREWALL DE PAQUETES CON DESTINO %s ' , switch_id , udp_dst_ip[0] )
   msg = of.ofp_flow_mod()
   if USE_UDP_PORT_FOR_FIREWALL:
     msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
@@ -146,6 +147,13 @@ def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None
   # msg.buffer_id = packet_in.buffer_id
   switches[switch_id].connection.send(msg)
 
+"""
+POTENCIAL FUNCION PARA INSTALAR UN FWALL EN TODOS LOS SWITCHES
+def blackhole_udp_packets_on_all_switches(duration , udp_dst_ip , udp_dst_port=None):
+  for k in switches.keys():
+    blackhole_udp_packets (k , duration , udp_dst_ip , udp_dst_port)
+"""
+    
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
 class ZgnLswitchFattree:
@@ -323,9 +331,19 @@ class Switch:
 # launch ----------------------------------------------------------------------------------------------------------------------
 
 
-def launch ():
+def launch (flow_duration = 10 , udp_fwall_pkts = 100):
   pox.log.color.launch()
   pox.log.launch(format="[@@@bold@@@level%(name)-22s@@@reset] " + "@@@bold%(message)s@@@normal")  
+  
+  # Los parametros de configuracion pueden pasarse como --nombre_parametro=VALOR inmediatamente luego del nombre de ESTE MODULO.
+  global FLOW_INSTALL_DURATION
+  FLOW_INSTALL_DURATION = flow_duration
+  log.info("DURACION DE FLUJOS: %s SEGUNDOS" , FLOW_INSTALL_DURATION)
+  
+  global UDP_FIREWALL_THRESHOLD
+  UDP_FIREWALL_THRESHOLD = udp_fwall_pkts
+  log.info("CANTIDAD DE PAQUETES UDP LIMITE P/FIREWALL: %s PAQUETES" , UDP_FIREWALL_THRESHOLD)
+  
   
   pox.openflow.discovery.launch()
   
