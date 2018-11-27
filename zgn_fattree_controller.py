@@ -156,7 +156,7 @@ def blackhole_udp_packets_on_all_switches(duration , udp_dst_ip , udp_dst_port=N
     
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
-class ZgnLswitchFattree:
+class ZgnFattreeController:
   def __init__ (self):  
     # Listen to dependencies
     def startup ():
@@ -165,7 +165,7 @@ class ZgnLswitchFattree:
       # Listen for flow stats
       core.openflow.addListenerByName("FlowStatsReceived", handle_flow_stats)
       core.openflow.addListenerByName("FlowRemoved", handle_flow_removed)
-      log.debug("ZgnLswitchFattree ESTA LISTO")
+      log.debug("ZgnFattreeController ESTA LISTO")
       
     core.call_when_ready(startup, ('openflow','openflow_discovery'))
 
@@ -352,7 +352,7 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100):
   pox.openflow.spanning_tree.launch(no_flood = True, hold_down = True)
   
   
-  core.registerNew(ZgnLswitchFattree)
+  core.registerNew(ZgnFattreeController)
   
   # Estas lineas de abajo exponen las variables adj y switch_ids al modulo interactivo de pox 'PY'
   core.Interactive.variables['adj'] = adj
