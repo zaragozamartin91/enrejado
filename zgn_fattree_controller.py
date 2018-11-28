@@ -3,6 +3,7 @@ import pox.log.color
 import pox.log
 import pox.openflow.discovery
 import pox.openflow.spanning_tree
+import host_tracker
 from pox.lib.recoco import Timer
 from collections import defaultdict
 import pox.openflow.libopenflow_01 as of
@@ -14,13 +15,19 @@ from pox.lib.util import dpid_to_str
 block_ports = set() 
 log = core.getLogger()
 
-# diccionario de componentes adyacentes
-# The defaultdict will simply create any non-existing items that you try to access. To create such a "default" item, it calls the function object that you pass in the constructor 
-adj = defaultdict(lambda:defaultdict(lambda:[]))
-# set de switch_ids
+# NOTA: CADA VEZ QUE HABLO DE SWITCH_ID ME ESTOY REFIRIENDO AL dpid DE LAS CONEXIONES DE LOS SWITCHES
+
+
+# diccionario de switches adyacentes. Contiene datos de tipo Link. 
+# Ejemplo de entrada: Link(dpid1=1,port1=1, dpid2=2,port2=1). 
+# Esta entrada quiere decir: el switch 1 esta conectado con el switch 2 por el puerto 1 del switch 1
+adj = defaultdict(lambda:defaultdict(lambda:None))
+# set de SWITCH_IDs
 switch_ids = set()
-# diccionario switch_id -> Switch (ver clase mas abajo)
+# diccionario SWITCH_ID -> Switch (ver clase mas abajo)
 switches = dict()
+# diccionario HOST_MAC -> SWITCH_ID
+hosts = dict()
 
 # Determinan / ajustan un tiempo de bloqueo de floods. 
 # Este tiempo se incrementara cada vez que se detecte un nuevo switch y un nuevo enlace
@@ -37,6 +44,8 @@ IP_dl_type = pkt.ethernet.IP_TYPE # 2048
 
 # valor por defecto de duracion de un flujo instalado en un switch
 FLOW_INSTALL_DURATION = 10
+# valor por defecto de duracion del firewall en segundos
+FIREWALL_DURATION = 10
 # Cantidad de paquetes UDP hacia un mismo destino que determinan la instalacion del FIREWALL
 UDP_FIREWALL_THRESHOLD = 100
 # Determina si se debe tener en cuenta el puerto destino udp para activar el FIREWALL
@@ -121,7 +130,7 @@ def handle_flow_stats (event):
 def handle_flow_removed(event):
   """ Listener que maneja eliminaciones de flujos en switches. Escucha eventos tipo FlowRemoved """
   switch_id = event.connection.dpid
-  log.info('SWITCH_%s: FLUJO REMOVIDO!' , switch_id)
+  log.debug('SWITCH_%s: FLUJO REMOVIDO!' , switch_id)
   match = event.ofp.match
 
   if is_udp(match): 
@@ -129,7 +138,7 @@ def handle_flow_removed(event):
     packet_count = event.ofp.packet_count
     log.info('SWITCH_%s: FLUJO REMOVIDO ES DE TIPO UDP CON DESTINO IP %s' , switch_id, dst_ip)
     if packet_count > UDP_FIREWALL_THRESHOLD: 
-      blackhole_udp_packets(switch_id , FLOW_INSTALL_DURATION , dst_ip)
+      blackhole_udp_packets(switch_id , FIREWALL_DURATION , dst_ip)
 
 def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None):
   """ Instala un flujo de dopeo de paquetes UDP para un destino determinado """
@@ -153,7 +162,21 @@ def blackhole_udp_packets_on_all_switches(duration , udp_dst_ip , udp_dst_port=N
   for k in switches.keys():
     blackhole_udp_packets (k , duration , udp_dst_ip , udp_dst_port)
 """
-    
+
+def handle_host_tracker_HostEvent (event):
+  # Name is intentionally mangled to keep listen_to_dependencies away
+  h = str(event.entry.macaddr)
+  s = event.entry.dpid
+  p = event.entry.port
+  
+  if h not in hosts:
+    hosts[h] = s
+    if s in switches:
+      log.info('NUEVO HOST %s CON SWITCH_%s@PORT_%s' , h , s , p)
+    else:
+      log.warn("Missing switch")
+
+
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
 class ZgnFattreeController:
@@ -165,9 +188,10 @@ class ZgnFattreeController:
       # Listen for flow stats
       core.openflow.addListenerByName("FlowStatsReceived", handle_flow_stats)
       core.openflow.addListenerByName("FlowRemoved", handle_flow_removed)
+      core.host_tracker.addListenerByName("HostEvent", handle_host_tracker_HostEvent)
       log.debug("ZgnFattreeController ESTA LISTO")
       
-    core.call_when_ready(startup, ('openflow','openflow_discovery'))
+    core.call_when_ready(startup, ('openflow','openflow_discovery','host_tracker'))
 
   def _handle_ConnectionUp (self, event):
     """ Listener de NUEVO SWITCH conectado """
@@ -191,7 +215,7 @@ class ZgnFattreeController:
     switch_ids.clear()
     # por cada enlace nuevo, se ajustan adj y switch_ids
     for l in core.openflow_discovery.adjacency:
-      adj[l.dpid1][l.dpid2].append(l)
+      adj[l.dpid1][l.dpid2] = l
       switch_ids.add(l.dpid1)
       switch_ids.add(l.dpid2)
 
@@ -211,6 +235,10 @@ class Switch:
     self.connection.addListeners(self)
     switches[dpid] = self
     
+  
+  def get_ports(self):
+    return self.connection.ports
+    
     
   def _handle_PacketIn (self, event):
     packet_in = event.ofp # objeto EVENTO de tipo PACKET_IN.
@@ -220,9 +248,32 @@ class Switch:
     dst_mac = packet.dst # MAC destino del paquete
     in_port = packet_in.in_port # puerto de switch por donde ingreso el paquete
     
+    # guardo la asociacion mac_origen -> puerto_entrada
+    log.debug('SWITCH_%s: Asociando MAC %s a puerto de entrada %s' , self.switch_id , src_mac , in_port)
+    self.mac_to_port[src_mac] = in_port
+    
+    eth_getNameForType = pkt.ETHERNET.ethernet.getNameForType(packet.type)
+    # Parseo tempranamente los tipos de datos conocidos 
+    pkt_is_ipv6 = eth_getNameForType == 'IPV6'
+    icmp_pkt = packet.find('icmp')
+    tcp_pkt = packet.find('tcp')
+    udp_pkt = packet.find('udp')
+    pkt_is_arp = packet.type == packet.ARP_TYPE
+    ip_pkt = packet.find('ipv4')
+    
+    # Obtengo el nombre 'imprimible' del paquete
+    pkt_type_name = eth_getNameForType
+    if icmp_pkt : pkt_type_name = 'ICMP'
+    if tcp_pkt : pkt_type_name = 'TCP'
+    if udp_pkt : pkt_type_name = 'UDP'
+    if pkt_is_arp : pkt_type_name = 'ARP'
+    
     def install_flow(out_port , duration = FLOW_INSTALL_DURATION):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
-      log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i" % (self.switch_id,src_mac, in_port, dst_mac, out_port))
+      if not pkt_is_arp: 
+        # SI LLEGA UN PAQUETE ARP NO IMPRIMO EL HECHO QUE SE INSTALO UN FLUJO
+        log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
+          (self.switch_id,src_mac, in_port, dst_mac, out_port , pkt_type_name))
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match.from_packet(packet, in_port)
       msg.idle_timeout = duration
@@ -278,52 +329,19 @@ class Switch:
         install_flow(out_port)
       else:
         flood()
-    
-    eth_getNameForType = pkt.ETHERNET.ethernet.getNameForType(packet.type)
-    # Parseo tempranamente los tipos de datos conocidos 
-    pkt_is_ipv6 = eth_getNameForType == 'IPV6'
-    icmp_pkt = packet.find('icmp')
-    tcp_pkt = packet.find('tcp')
-    udp_pkt = packet.find('udp')
-    pkt_is_arp = packet.type == packet.ARP_TYPE
-    ip_pkt = packet.find('ipv4')
-    
-    def handle_dhcp():
-      """ Maneja paquetes DHCP ... Pensar si acaso deberian dropearse... """
-      dstip = ip_pkt.dstip
-      log.debug('MANEJANDO PAQUETE DHCP HACIA IP %s' % str(dstip) )
-      handle_all()
-    
-    def handle_udp():
-      """ Maneja paquetes UDP. Debe detectar ataques udp e instalar un firewall temporal en el switch """
-      dstip = ip_pkt.dstip
-      dstport = udp_pkt.dstport
-      if dstport == DHCP_PORT : return handle_dhcp()
-      log.debug('MANEJANDO PAQUETE UDP HACIA IP %s:%d' % (str(dstip),dstport) )
-      handle_all()
       
     
     # LOS PAQUETES DESCONOCIDOS SON DROPEADOS. POR AHORA IGNORAMOS LOS PAQUETES IPV6
+    # DADO QUE ESTAMOS USANDO host_tracker, DEBEMOS MANEJAR LOS PAQUETES ARP (NO DROPEAR)
     unknown_pkt = pkt_is_ipv6 or ( icmp_pkt is None and tcp_pkt is None and udp_pkt is None and not pkt_is_arp )
     if unknown_pkt:
-      #log.debug('PAQUETE DESCONOCIDO DETECTADO')
-      drop()
+      log.debug('PAQUETE DESCONOCIDO DETECTADO DE TIPO %s::%s' , eth_getNameForType , pkt_type_name)
+      drop(30)
       return
     
-    # Obtengo el nombre 'imprimible' del paquete
-    pkt_type_name = ''
-    if icmp_pkt : pkt_type_name = 'ICMP'
-    if tcp_pkt : pkt_type_name = 'TCP'
-    if udp_pkt : pkt_type_name = 'UDP'
-    if pkt_is_arp : pkt_type_name = 'ARP'
-    log.debug('SWITCH_%s#PORT_%d -> PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
+    log.debug('SWITCH_%s@PORT_%d LLEGO PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
       (self.switch_id,in_port,eth_getNameForType,pkt_type_name,src_mac,dst_mac))
-    
-    # guardo la asociacion mac_origen -> puerto_entrada
-    self.mac_to_port[src_mac] = in_port
-    
-    # si el paquete es udp lo manejo como tal
-    if udp_pkt and ip_pkt: return handle_udp()
+
  
     handle_all() 
       
@@ -331,7 +349,7 @@ class Switch:
 # launch ----------------------------------------------------------------------------------------------------------------------
 
 
-def launch (flow_duration = 10 , udp_fwall_pkts = 100):
+def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   pox.log.color.launch()
   pox.log.launch(format="[@@@bold@@@level%(name)-22s@@@reset] " + "@@@bold%(message)s@@@normal")  
   
@@ -344,12 +362,18 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100):
   UDP_FIREWALL_THRESHOLD = udp_fwall_pkts
   log.info("CANTIDAD DE PAQUETES UDP LIMITE P/FIREWALL: %s PAQUETES" , UDP_FIREWALL_THRESHOLD)
   
+  global FIREWALL_DURATION
+  FIREWALL_DURATION = fwall_duration
+  log.info("DURACION DEL FIREWALL: %s SEGUNDOS" , FIREWALL_DURATION)
   
   pox.openflow.discovery.launch()
   
   # no_flood: If True, we set ports down when a switch connects
   # hold_down: If True, don't allow turning off flood bits until a complete discovery cycle should have completed (mostly makes sense with _noflood_by_default).
   pox.openflow.spanning_tree.launch(no_flood = True, hold_down = True)
+  
+  # --arpAware=15 --arpSilent=45 --arpReply=1 --entryMove=4
+  host_tracker.launch(arpAware=15 , arpSilent=45 , entryMove=4)
   
   
   core.registerNew(ZgnFattreeController)
