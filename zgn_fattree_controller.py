@@ -26,7 +26,7 @@ adj = defaultdict(lambda:defaultdict(lambda:None))
 switch_ids = set()
 # diccionario SWITCH_ID -> Switch (ver clase mas abajo)
 switches = dict()
-# diccionario HOST_MAC -> SWITCH_ID
+# diccionario de tuplas de tipo: HOST_MAC -> (SWITCH_ID , PUERTO_SWITCH)
 hosts = dict()
 
 # Determinan / ajustan un tiempo de bloqueo de floods. 
@@ -53,6 +53,10 @@ USE_UDP_PORT_FOR_FIREWALL = False
 
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
+  """ Esta funcion encuentra todos los caminos posibles entre dos switches. Los caminos son poblados como un arreglo de arreglos 
+  en el parametro found_paths , por lo cual para obtener los caminos disponibles se debe pasar un arreglo vacio como parametro found_paths.
+  curr_switch_id: SWITCH_ID inicial
+  end_switch_id: SWITCH_ID final """
   print('curr_switch_id: ' , curr_switch_id , ' ; end_switch_id: ' , end_switch_id , ' ; curr_path: ' , curr_path)
   path_copy = list(curr_path) # copio la lista del path actual
   path_copy.append(curr_switch_id) # agrego el switch actual a la lista
@@ -130,13 +134,13 @@ def handle_flow_stats (event):
 def handle_flow_removed(event):
   """ Listener que maneja eliminaciones de flujos en switches. Escucha eventos tipo FlowRemoved """
   switch_id = event.connection.dpid
-  log.debug('SWITCH_%s: FLUJO REMOVIDO!' , switch_id)
+  log.info('SWITCH_%s: FLUJO REMOVIDO!' , switch_id)
   match = event.ofp.match
 
   if is_udp(match): 
     dst_ip = match.get_nw_dst() # Tupla IP , bits_mascara. Ejemplo: (IPAddr('10.0.0.2'), 32)
     packet_count = event.ofp.packet_count
-    log.info('SWITCH_%s: FLUJO REMOVIDO ES DE TIPO UDP CON DESTINO IP %s' , switch_id, dst_ip)
+    log.info('SWITCH_%s: FLUJO REMOVIDO ES DE TIPO UDP CON DESTINO IP %s . packet_count: %s' , switch_id, dst_ip , packet_count)
     if packet_count > UDP_FIREWALL_THRESHOLD: 
       blackhole_udp_packets(switch_id , FIREWALL_DURATION , dst_ip)
 
@@ -164,15 +168,15 @@ def blackhole_udp_packets_on_all_switches(duration , udp_dst_ip , udp_dst_port=N
 """
 
 def handle_host_tracker_HostEvent (event):
-  # Name is intentionally mangled to keep listen_to_dependencies away
-  h = str(event.entry.macaddr)
-  s = event.entry.dpid
-  p = event.entry.port
+  """ Listener de eventos tipo HOST NUEVO CONECTADO """
+  host_mac = str(event.entry.macaddr)
+  switch_id = event.entry.dpid
+  switch_port = event.entry.port
   
-  if h not in hosts:
-    hosts[h] = s
-    if s in switches:
-      log.info('NUEVO HOST %s CON SWITCH_%s@PORT_%s' , h , s , p)
+  if host_mac not in hosts:
+    hosts[host_mac] = (switch_id , switch_port)
+    if switch_id in switches:
+      log.info('NUEVO HOST %s CON SWITCH_%s@PORT_%s' , host_mac , switch_id , switch_port)
     else:
       log.warn("Missing switch")
 
@@ -270,10 +274,8 @@ class Switch:
     
     def install_flow(out_port , duration = FLOW_INSTALL_DURATION):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
-      if not pkt_is_arp: 
-        # SI LLEGA UN PAQUETE ARP NO IMPRIMO EL HECHO QUE SE INSTALO UN FLUJO
-        log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
-          (self.switch_id,src_mac, in_port, dst_mac, out_port , pkt_type_name))
+      log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
+        (self.switch_id,src_mac, in_port, dst_mac, out_port , pkt_type_name))
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match.from_packet(packet, in_port)
       msg.idle_timeout = duration
@@ -349,7 +351,7 @@ class Switch:
 # launch ----------------------------------------------------------------------------------------------------------------------
 
 
-def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
+def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 30):
   pox.log.color.launch()
   pox.log.launch(format="[@@@bold@@@level%(name)-22s@@@reset] " + "@@@bold%(message)s@@@normal")  
   
@@ -383,6 +385,7 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['switch_ids'] = switch_ids
   core.Interactive.variables['switches'] = switches
   core.Interactive.variables['stats'] = request_flow_stats
+  core.Interactive.variables['hosts'] = hosts
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
   #timeout = min(max(PATH_SETUP_TIME, 5) * 2, 15)
