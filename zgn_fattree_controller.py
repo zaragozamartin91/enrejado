@@ -77,25 +77,27 @@ def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_pat
   
 
 
-
-def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port = None):
-  """FUNCION QUE SOLICITA DATOS ESTADISTICOS PARA UN FLUJO ESPECIFICO UDP ESPECIFICO"""
-  log.info('SOLICITANDO FLOW STATS UDP DE SWITCH %s CON IP DESTINO %s' , switch_id , udp_dst_ip)
-  sw = switches[switch_id]
-  con = sw.connection
-  req_body = of.ofp_flow_stats_request()
-  req_match = None
-  if USE_UDP_PORT_FOR_FIREWALL: 
-    req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
-  else: 
-    req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
-  req_match.set_nw_dst(udp_dst_ip,32) # Sets the IP source address and the number of bits to match
-  req_body.match = req_match
-  msg = of.ofp_stats_request(body=req_body)
-  con.send(msg)
+# LAS LINEAS DE ABAJO SON PARA UNA SOLUCION ALTERNATIVA DEL FIREWALL CON SOLICITUD DE ESTADISTICAS PERIODICAS  
+#def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port = None):
+#  """FUNCION QUE SOLICITA DATOS ESTADISTICOS PARA UN FLUJO ESPECIFICO UDP ESPECIFICO"""
+#  log.info('SOLICITANDO FLOW STATS UDP DE SWITCH %s CON IP DESTINO %s' , switch_id , udp_dst_ip)
+#  sw = switches[switch_id]
+#  con = sw.connection
+#  req_body = of.ofp_flow_stats_request()
+#  req_match = None
+#  if USE_UDP_PORT_FOR_FIREWALL: 
+#    req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+#  else: 
+#    req_match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
+#  req_match.set_nw_dst(udp_dst_ip,32) # Sets the IP source address and the number of bits to match
+#  req_match.pepe = 1 # pruebo agregar un elemento custom al match
+#  req_body.match = req_match
+#  msg = of.ofp_stats_request(body=req_body)
+#  con.send(msg)
 
 
 def request_flow_stats(switch_id):
+  """ Solicita estadisticas de flujo de un switch. """
   sw = switches[switch_id]
   con = sw.connection
   msg = of.ofp_stats_request(body=of.ofp_flow_stats_request())
@@ -132,74 +134,95 @@ def handle_flow_stats (event):
       all_stats["icmp"]["packet_count"] += f.packet_count
       all_stats["icmp"]["byte_count"] += f.byte_count
   log.info("SWITCH_%s stats: %s" , switch_id , all_stats)
-  
-def handle_udp_flow_stats (event):
-  log.info("MANEJANDO STATS UDP")
-  switch_id = event.connection.dpid
-  packet_count = 0
-  dst_ip = None
-  for f in event.stats:
-    if is_udp(f.match): 
-      packet_count += f.packet_count
-      dst_ip = f.match.get_nw_dst()
-      log.info("SWITCH_%s : handle_udp_flow_stats : dst_ip = %s" , switch_id , dst_ip)
-  log.info("SWITCH_%s : handle_udp_flow_stats : packet_count = %s" , switch_id , packet_count)
-  if packet_count > UDP_FIREWALL_THRESHOLD:
-    blackhole_udp_packets(switch_id , FIREWALL_DURATION , dst_ip)
-  else:
-    remove_udp_blackhole(switch_id , dst_ip)
-    
-def remove_udp_blackhole(switch_id , udp_dst_ip):
-  """ Funcion para dar de baja un firewall """
-  log.info('SWITCH_%s: REMOVIENDO FIREWALL DE PAQUETES CON DESTINO %s ' , switch_id , udp_dst_ip[0] )
-  msg = of.ofp_flow_mod()
-  if USE_UDP_PORT_FOR_FIREWALL:
-    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
-  else:
-    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
-  msg.match.set_nw_dst( str(udp_dst_ip[0]) , udp_dst_ip[1])
-  msg.command = of.OFPFC_DELETE
-  switches[switch_id].connection.send(msg)
-  
+
+# LAS LINEAS DE ABAJO SON PARA UNA SOLUCION ALTERNATIVA DEL FIREWALL CON SOLICITUD DE ESTADISTICAS PERIODICAS  
+#def handle_udp_flow_stats (event):
+#  log.info("MANEJANDO STATS UDP")
+#  switch_id = event.connection.dpid
+#  packet_count = 0
+#  dst_ip = None
+#  for f in event.stats:
+#    if hasattr(f.match, 'pepe'): log.info("ATRIBUTO PEPE EXISTE!")
+#    if is_udp(f.match): 
+#      packet_count += f.packet_count
+#      dst_ip = f.match.get_nw_dst()
+#      log.info("SWITCH_%s : handle_udp_flow_stats : dst_ip = %s" , switch_id , dst_ip)
+#  log.info("SWITCH_%s : handle_udp_flow_stats : packet_count = %s" , switch_id , packet_count)
+#  if packet_count > UDP_FIREWALL_THRESHOLD:
+#    blackhole_udp_packets(switch_id , FIREWALL_DURATION , dst_ip)
+#  else:
+#    remove_udp_blackhole(switch_id , dst_ip)
+
+# LAS LINEAS DE ABAJO SON PARA UNA SOLUCION ALTERNATIVA DEL FIREWALL CON SOLICITUD DE ESTADISTICAS PERIODICAS
+#def remove_udp_blackhole(switch_id , udp_dst_ip):
+#  """ Funcion para dar de baja un firewall """
+#  log.info('SWITCH_%s: REMOVIENDO FIREWALL DE PAQUETES CON DESTINO %s ' , switch_id , udp_dst_ip[0] )
+#  msg = of.ofp_flow_mod()
+#  if USE_UDP_PORT_FOR_FIREWALL:
+#    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+#  else:
+#    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
+#  msg.match.set_nw_dst( str(udp_dst_ip[0]) , udp_dst_ip[1])
+#  msg.command = of.OFPFC_DELETE
+#  switches[switch_id].connection.send(msg)
+
+# blacklist o lista negra de IPs bloqueadas por firewall
+firewall_ips = set()
+
 def handle_flow_removed(event):
   """ Listener que maneja eliminaciones de flujos en switches. Escucha eventos tipo FlowRemoved """
   switch_id = event.connection.dpid
-  log.info('SWITCH_%s: FLUJO REMOVIDO!' , switch_id)
   match = event.ofp.match
+  packet_count = event.ofp.packet_count
 
   if is_udp(match): 
     dst_ip = match.get_nw_dst() # Tupla IP , bits_mascara. Ejemplo: (IPAddr('10.0.0.2'), 32)
-    packet_count = event.ofp.packet_count
-    log.info('SWITCH_%s: FLUJO REMOVIDO ES DE TIPO UDP CON DESTINO IP %s . packet_count: %s' , switch_id, dst_ip , packet_count)
-    if packet_count > UDP_FIREWALL_THRESHOLD: 
+    log.info('SWITCH_%s: FLUJO REMOVIDO DE TIPO UDP CON DESTINO IP %s . packet_count: %s' , switch_id, dst_ip , packet_count)
+    if packet_count > UDP_FIREWALL_THRESHOLD:
+      # Si la cantidad de paquetes UDP supera el THRESHOLD establecido -> instalo un blackhole firewall
       blackhole_udp_packets(switch_id , FIREWALL_DURATION , dst_ip)
-
+    else:
+      # Si la cantidad de paquetes UDP para un destino baja luego de un tiempo, entonces se lo quita del blacklist de destinos bloqueados
+      str_dst_ip = str(dst_ip[0])
+      log.info("QUITANDO %s DE LISTA NEGRA DE IPs bloqueadas" , str_dst_ip)
+      if str_dst_ip in firewall_ips : firewall_ips.remove(str_dst_ip)
+  elif is_icmp(match):
+    log.info('SWITCH_%s: FLUJO REMOVIDO DE TIPO ICMP . packet_count: %s' , switch_id, packet_count)
+  elif is_tcp(match):
+    dst_ip = match.get_nw_dst() # Tupla IP , bits_mascara. Ejemplo: (IPAddr('10.0.0.2'), 32)
+    log.info('SWITCH_%s: FLUJO REMOVIDO DE TIPO TCP CON DESTINO IP %s . packet_count: %s' , switch_id, dst_ip , packet_count)
+  else:
+    log.info('SWITCH_%s: FLUJO REMOVIDO packet_count: %s' , switch_id , packet_count)
+      
 def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None):
   """ Instala un flujo de dopeo de paquetes UDP para un destino determinado """
-  # NOTA: ESTA FUNCION INSTALA UN FIREWALL TIPO BLACKHOLE EN UN SOLO SWITCH... SE DEBE CONSIDERAR SI ACASO EL FIREWALL
-  # DEBE INSTALARSE EN TODOS LOS SWITCHES...
-  log.info('SWITCH_%s: INSTALANDO FIREWALL DE PAQUETES CON DESTINO %s ' , switch_id , udp_dst_ip[0] )
+  # NOTA: ESTA FUNCION INSTALA UN FIREWALL TIPO BLACKHOLE EN UN SOLO SWITCH... SE DEBE CONSIDERAR SI ACASO EL FIREWALL DEBE INSTALARSE EN TODOS LOS SWITCHES AL MISMO TIEMPO...
+  str_dst_ip = str(udp_dst_ip[0])
+  firewall_ips.add(str_dst_ip)
+  log.info('SWITCH_%s: INSTALANDO FIREWALL DE PAQUETES CON DESTINO %s ' , switch_id , str_dst_ip )
   msg = of.ofp_flow_mod()
   if USE_UDP_PORT_FOR_FIREWALL:
     msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
   else:
     msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
-  msg.match.set_nw_dst( str(udp_dst_ip[0]) , udp_dst_ip[1])
+  msg.match.set_nw_dst( str_dst_ip , udp_dst_ip[1])
   msg.idle_timeout = duration
   msg.hard_timeout = duration
-  # msg.buffer_id = packet_in.buffer_id
+  msg.actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Enviar el paquete a la NADA
+  msg.flags = of.OFPFF_SEND_FLOW_REM # Generar evento FlowRemoved luego de que el flujo sea removido
   switches[switch_id].connection.send(msg)
-  udp_flow_stats_lambda = lambda: request_udp_flow_stats(switch_id ,str(udp_dst_ip[0]) )
-  timeout = int( FIREWALL_DURATION / 2 )
-  Timer(timeout, udp_flow_stats_lambda)
+  # LAS LINEAS DE ABAJO SON PARA UNA SOLUCION ALTERNATIVA DEL FIREWALL CON SOLICITUD DE ESTADISTICAS PERIODICAS
+  #udp_flow_stats_lambda = lambda: request_udp_flow_stats(switch_id ,str(udp_dst_ip[0]) )
+  #timeout = int( FIREWALL_DURATION / 2 )
+  #Timer(timeout, udp_flow_stats_lambda)
   
 
-"""
-POTENCIAL FUNCION PARA INSTALAR UN FWALL EN TODOS LOS SWITCHES
-def blackhole_udp_packets_on_all_switches(duration , udp_dst_ip , udp_dst_port=None):
-  for k in switches.keys():
-    blackhole_udp_packets (k , duration , udp_dst_ip , udp_dst_port)
-"""
+
+# POTENCIAL FUNCION PARA INSTALAR UN FWALL EN TODOS LOS SWITCHES
+#def blackhole_udp_packets_on_all_switches(duration , udp_dst_ip , udp_dst_port=None):
+#  for k in switches.keys():
+#    blackhole_udp_packets (k , duration , udp_dst_ip , udp_dst_port)
+
 
 def handle_host_tracker_HostEvent (event):
   """ Listener de eventos tipo HOST NUEVO CONECTADO """
@@ -225,7 +248,8 @@ class ZgnFattreeController:
       core.openflow_discovery.addListeners(self)        
       # Listen for flow stats
       core.openflow.addListenerByName("FlowStatsReceived", handle_flow_stats)
-      core.openflow.addListenerByName("FlowStatsReceived", handle_udp_flow_stats)
+      # EL LISTENER DE ABAJO ES PARA UNA SOLUCION ALTERNATIVA DEL FIREWALL CON SOLICITUD DE ESTADISTICAS PERIODICAS.
+      #core.openflow.addListenerByName("FlowStatsReceived", handle_udp_flow_stats)
       core.openflow.addListenerByName("FlowRemoved", handle_flow_removed)
       core.host_tracker.addListenerByName("HostEvent", handle_host_tracker_HostEvent)
       log.debug("ZgnFattreeController ESTA LISTO")
@@ -317,9 +341,9 @@ class Switch:
       msg.hard_timeout = duration
       msg.actions.append(of.ofp_action_output(port = out_port))
       msg.data = packet_in
-      # esta linea es mucho muy importante dado que indica al switch que debe notificar al controlador cuando un flujo haya
-      # sido dado de baja. Ver funcion handle_flow_removed
-      msg.flags = of.OFPFF_SEND_FLOW_REM
+      # OFPFF_SEND_FLOW_REM indica al switch que debe notificar al controlador cuando un flujo haya sido dado de baja. Ver funcion handle_flow_removed
+      # OFPFF_CHECK_OVERLAP pide al switch que verifique overlap de reglas de flujo
+      msg.flags = of.OFPFF_SEND_FLOW_REM + of.OFPFF_CHECK_OVERLAP
       self.connection.send(msg)
       
     def drop (duration = None):
@@ -334,11 +358,13 @@ class Switch:
         msg.idle_timeout = duration[0]
         msg.hard_timeout = duration[1]
         msg.buffer_id = packet_in.buffer_id
+        msg.actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Enviar el paquete a la NADA
         self.connection.send(msg)
       elif packet_in.buffer_id is not None:
         msg = of.ofp_packet_out()
         msg.buffer_id = packet_in.buffer_id
         msg.in_port = in_port
+        msg.actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Enviar el paquete a la NADA
         self.connection.send(msg)
         
     def flood ():
@@ -360,13 +386,33 @@ class Switch:
     def handle_all():
       """ Maneja los paquetes de forma generica """
       # TODO : MODIFICAR ESTE COMPORTAMIENTO PARA SOPORTAR ECMP
+      # NOTA : dado que instalar un flujo demora tiempo, handle_all se esta llamando multiples veces...
       # si el puerto de salida se encuentra en la tabla de MACs entonces instalo un flujo en el switch
       if dst_mac in self.mac_to_port:
         out_port = self.mac_to_port[dst_mac]
         install_flow(out_port)
       else:
         flood()
-      
+        
+    def handle_dhcp():
+      """ Maneja paquetes DHCP ... Pensar si acaso deberian dropearse... """
+      dstip = ip_pkt.dstip
+      log.debug('MANEJANDO PAQUETE DHCP HACIA IP %s' % str(dstip) )
+      handle_all()
+    
+    def handle_udp():
+      """ Maneja paquetes UDP. Debe detectar ataques udp e instalar un firewall temporal en el switch """
+      dstip = ip_pkt.dstip
+      str_dst_ip = str(dstip)
+      if str_dst_ip in firewall_ips:
+        log.info('SWITCH_%s PAQUETES CON DESTINO %s SIGUEN BLOQUEADOS... REALIZANDO DROP' , self.switch_id , str_dst_ip)
+        drop()
+        return
+        
+      dstport = udp_pkt.dstport
+      if dstport == DHCP_PORT : return handle_dhcp()
+      log.info('MANEJANDO PAQUETE UDP HACIA IP %s PUERTO %d' % (str_dst_ip, dstport) )
+      handle_all()
     
     # LOS PAQUETES DESCONOCIDOS SON DROPEADOS. POR AHORA IGNORAMOS LOS PAQUETES IPV6
     # DADO QUE ESTAMOS USANDO host_tracker, DEBEMOS MANEJAR LOS PAQUETES ARP (NO DROPEAR)
@@ -379,14 +425,14 @@ class Switch:
     log.debug('SWITCH_%s@PORT_%d LLEGO PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
       (self.switch_id,in_port,eth_getNameForType,pkt_type_name,src_mac,dst_mac))
 
- 
-    handle_all() 
-      
+    if udp_pkt: handle_udp()
+    else: handle_all() 
+
     
 # launch ----------------------------------------------------------------------------------------------------------------------
 
 
-def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 30):
+def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   pox.log.color.launch()
   pox.log.launch(format="[@@@bold@@@level%(name)-22s@@@reset] " + "@@@bold%(message)s@@@normal")  
   
@@ -399,6 +445,7 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 30):
   UDP_FIREWALL_THRESHOLD = udp_fwall_pkts
   log.info("CANTIDAD DE PAQUETES UDP LIMITE P/FIREWALL: %s PAQUETES" , UDP_FIREWALL_THRESHOLD)
   
+  # Duracion base del firewall. Se renueva cada FIREWALL_DURATION segundos (si es necesario).
   global FIREWALL_DURATION
   FIREWALL_DURATION = fwall_duration
   log.info("DURACION DEL FIREWALL: %s SEGUNDOS" , FIREWALL_DURATION)
@@ -421,6 +468,8 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 30):
   core.Interactive.variables['switches'] = switches
   core.Interactive.variables['stats'] = request_flow_stats
   core.Interactive.variables['hosts'] = hosts
+  core.Interactive.variables['firewall_ips'] = firewall_ips
+  
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
   #timeout = min(max(PATH_SETUP_TIME, 5) * 2, 15)
