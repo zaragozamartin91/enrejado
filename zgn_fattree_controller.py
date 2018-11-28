@@ -76,9 +76,11 @@ def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_pat
 # DEFINO FUNCIONES Y LISTENERS DE ESTADISTICAS DE SWITCHES PARA EVENTUALMENTE ARMAR EL FIREWALL -------------
   
 
-"""
-EJEMPLO DE FUNCION QUE SOLICITA DATOS ESTADISTICOS PARA UN FLUJO ESPECIFICO
-def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port):
+
+
+def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port = None):
+  """FUNCION QUE SOLICITA DATOS ESTADISTICOS PARA UN FLUJO ESPECIFICO UDP ESPECIFICO"""
+  log.info('SOLICITANDO FLOW STATS UDP DE SWITCH %s CON IP DESTINO %s' , switch_id , udp_dst_ip)
   sw = switches[switch_id]
   con = sw.connection
   req_body = of.ofp_flow_stats_request()
@@ -91,7 +93,7 @@ def request_udp_flow_stats(switch_id , udp_dst_ip , udp_dst_port):
   req_body.match = req_match
   msg = of.ofp_stats_request(body=req_body)
   con.send(msg)
-"""
+
 
 def request_flow_stats(switch_id):
   sw = switches[switch_id]
@@ -131,6 +133,34 @@ def handle_flow_stats (event):
       all_stats["icmp"]["byte_count"] += f.byte_count
   log.info("SWITCH_%s stats: %s" , switch_id , all_stats)
   
+def handle_udp_flow_stats (event):
+  log.info("MANEJANDO STATS UDP")
+  switch_id = event.connection.dpid
+  packet_count = 0
+  dst_ip = None
+  for f in event.stats:
+    if is_udp(f.match): 
+      packet_count += f.packet_count
+      dst_ip = f.match.get_nw_dst()
+      log.info("SWITCH_%s : handle_udp_flow_stats : dst_ip = %s" , switch_id , dst_ip)
+  log.info("SWITCH_%s : handle_udp_flow_stats : packet_count = %s" , switch_id , packet_count)
+  if packet_count > UDP_FIREWALL_THRESHOLD:
+    blackhole_udp_packets(switch_id , FIREWALL_DURATION , dst_ip)
+  else:
+    remove_udp_blackhole(switch_id , dst_ip)
+    
+def remove_udp_blackhole(switch_id , udp_dst_ip):
+  """ Funcion para dar de baja un firewall """
+  log.info('SWITCH_%s: REMOVIENDO FIREWALL DE PAQUETES CON DESTINO %s ' , switch_id , udp_dst_ip[0] )
+  msg = of.ofp_flow_mod()
+  if USE_UDP_PORT_FOR_FIREWALL:
+    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto, tp_dst=udp_dst_port)
+  else:
+    msg.match = of.ofp_match(dl_type=IP_dl_type, nw_proto=UDP_nw_proto)
+  msg.match.set_nw_dst( str(udp_dst_ip[0]) , udp_dst_ip[1])
+  msg.command = of.OFPFC_DELETE
+  switches[switch_id].connection.send(msg)
+  
 def handle_flow_removed(event):
   """ Listener que maneja eliminaciones de flujos en switches. Escucha eventos tipo FlowRemoved """
   switch_id = event.connection.dpid
@@ -159,6 +189,10 @@ def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None
   msg.hard_timeout = duration
   # msg.buffer_id = packet_in.buffer_id
   switches[switch_id].connection.send(msg)
+  udp_flow_stats_lambda = lambda: request_udp_flow_stats(switch_id ,str(udp_dst_ip[0]) )
+  timeout = int( FIREWALL_DURATION / 2 )
+  Timer(timeout, udp_flow_stats_lambda)
+  
 
 """
 POTENCIAL FUNCION PARA INSTALAR UN FWALL EN TODOS LOS SWITCHES
@@ -191,6 +225,7 @@ class ZgnFattreeController:
       core.openflow_discovery.addListeners(self)        
       # Listen for flow stats
       core.openflow.addListenerByName("FlowStatsReceived", handle_flow_stats)
+      core.openflow.addListenerByName("FlowStatsReceived", handle_udp_flow_stats)
       core.openflow.addListenerByName("FlowRemoved", handle_flow_removed)
       core.host_tracker.addListenerByName("HostEvent", handle_host_tracker_HostEvent)
       log.debug("ZgnFattreeController ESTA LISTO")
