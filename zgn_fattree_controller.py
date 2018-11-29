@@ -29,6 +29,8 @@ switch_ids = set()
 switches = dict()
 # diccionario de tuplas de tipo: HOST_MAC_STRING -> (SWITCH_ID , PUERTO_SWITCH)
 hosts = dict()
+# set de paths de switches tomados
+taken_paths = set()
 
 # Determinan / ajustan un tiempo de bloqueo de floods. 
 # Este tiempo se incrementara cada vez que se detecte un nuevo switch y un nuevo enlace
@@ -52,13 +54,13 @@ UDP_FIREWALL_THRESHOLD = 100
 # Determina si se debe tener en cuenta el puerto destino udp para activar el FIREWALL
 USE_UDP_PORT_FOR_FIREWALL = False
 
-  
+
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
   """ Esta funcion encuentra todos los caminos posibles entre dos switches. Los caminos son poblados como un arreglo de arreglos 
   en el parametro found_paths , por lo cual para obtener los caminos disponibles se debe pasar un arreglo vacio como parametro found_paths.
   curr_switch_id: SWITCH_ID inicial
-  end_switch_id: SWITCH_ID final """
+  end_switch_id: SWITCH_ID final. """
   print('curr_switch_id: ' , curr_switch_id , ' ; end_switch_id: ' , end_switch_id , ' ; curr_path: ' , curr_path)
   path_copy = list(curr_path) # copio la lista del path actual
   path_copy.append(curr_switch_id) # agrego el switch actual a la lista
@@ -74,6 +76,15 @@ def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_pat
       path_found = find_switch_path(adj_sw_id , end_switch_id , found_paths , path_copy)
       any_path_found = any_path_found or path_found
   return any_path_found
+  
+
+def find_non_taken_path(curr_switch_id , end_switch_id):
+  """ Obtiene el primer path de switches no tomado """
+  found_paths = []
+  find_switch_path(curr_switch_id , end_switch_id , found_paths)
+  for fp in found_paths:
+    if str(fp) not in taken_paths: return fp
+  return None
 
 # DEFINO FUNCIONES Y LISTENERS DE ESTADISTICAS DE SWITCHES PARA EVENTUALMENTE ARMAR EL FIREWALL -------------
   
@@ -282,6 +293,12 @@ def get_host_mac(host_ip):
     if host_ip == hi: return hk
     
   return None
+  
+def get_host_by_ip(host_ip):
+  """ Obtiene un objeto tipo host a partir de su ip """
+  host_mac = get_host_mac(host_ip)
+  if host_mac in hosts: return hosts[host_mac]
+  else return None
 
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
@@ -377,6 +394,15 @@ class Switch:
     if udp_pkt : pkt_type_name = 'UDP'
     if pkt_is_arp : pkt_type_name = 'ARP'
     
+    def build_flow_key():
+      # creo la clave del flujo 
+      flow_key = pkt_type_name + '#'
+      if ip_pkt: flow_key += str(ip_pkt.srcip) + 'to' + str(ip_pkt.dstip)
+      if tcp_pkt: flow_key += ':' + str(tcp_pkt.dstport)
+      if udp_pkt: flow_key += ':' + str(udp_pkt.dstport)
+      log.info("SWITCH_%s: flow_key = %s" , self.switch_id , flow_key)
+      return flow_key
+    
     def install_flow(out_port , duration = FLOW_INSTALL_DURATION):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
       log.debug("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
@@ -445,6 +471,15 @@ class Switch:
       dstip = ip_pkt.dstip
       log.debug('MANEJANDO PAQUETE DHCP HACIA IP %s' % str(dstip) )
       handle_all()
+      
+    def handle_ip():
+      """ Maneja paquetes tipo ip """
+      flow_key = build_flow_key()
+      src_mac_str = str(src_mac)
+      is_srchost_known = src_mac_str in hosts
+      log.info("SWITCH_%s: host origen %s es conocido ... %s" , self.switch_id ,src_mac_str , is_srchost_known )
+      # si el host origen es conocido, entonces este es un switch de borde
+      handle_all()
     
     def handle_udp():
       """ Maneja paquetes UDP. Debe detectar ataques udp e instalar un firewall temporal en el switch """
@@ -454,25 +489,31 @@ class Switch:
         log.info('SWITCH_%s PAQUETES CON DESTINO %s SIGUEN BLOQUEADOS... REALIZANDO DROP' , self.switch_id , str_dst_ip)
         drop()
         return
-        
       dstport = udp_pkt.dstport
       if dstport == DHCP_PORT : return handle_dhcp()
-      log.info('MANEJANDO PAQUETE UDP HACIA IP %s PUERTO %d' % (str_dst_ip, dstport) )
-      handle_all()
+      handle_ip()  
+    
+    def handle_unknown():
+      """ Maneja un paquete de tipo desconocido """
+      log.debug('PAQUETE DESCONOCIDO DETECTADO DE TIPO %s::%s' , eth_getNameForType , pkt_type_name)
+      # TODO : VER QUE ES MEJOR , SI MANEJAR LOS PAQUETES DESCONOCIDOS O SI DROPEARLOS
+      drop(30)
+      #handle_all()
     
     # LOS PAQUETES DESCONOCIDOS SON DROPEADOS. POR AHORA IGNORAMOS LOS PAQUETES IPV6
     # DADO QUE ESTAMOS USANDO host_tracker, DEBEMOS MANEJAR LOS PAQUETES ARP (NO DROPEAR)
     unknown_pkt = pkt_is_ipv6 or ( icmp_pkt is None and tcp_pkt is None and udp_pkt is None and not pkt_is_arp )
-    if unknown_pkt:
-      log.debug('PAQUETE DESCONOCIDO DETECTADO DE TIPO %s::%s' , eth_getNameForType , pkt_type_name)
-      drop(30)
-      return
+    if unknown_pkt: return handle_unknown()
+    
     
     log.debug('SWITCH_%s@PORT_%d LLEGO PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
       (self.switch_id,in_port,eth_getNameForType,pkt_type_name,src_mac,dst_mac))
 
-    if udp_pkt: handle_udp()
-    else: handle_all() 
+    if udp_pkt: return handle_udp()
+    
+    if ip_pkt: return handle_ip()
+    
+    handle_all()
 
     
 # launch ----------------------------------------------------------------------------------------------------------------------
@@ -518,6 +559,7 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['mac_entries'] = get_host_tracker_entries
   core.Interactive.variables['host_ip'] = get_host_ip
   core.Interactive.variables['host_mac'] = get_host_mac
+  core.Interactive.variables['find_switch_path'] = find_switch_path
   
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
