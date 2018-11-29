@@ -252,12 +252,12 @@ def get_host_tracker_entries():
   return core.host_tracker.entryByMAC
 
 def host_exists(host_mac):
-  """ Retorna true si un host existe """
+  """ Retorna true si un host (NO SWITCH) existe """
   host_mac_str = str(host_mac)
   return host_mac_str in hosts
       
 def get_host_ip(host_mac):
-  """ Funcion que retorna la IP de un host a partir de una direccion MAC.
+  """ Funcion que retorna la IP de un host (NO SWITCH) a partir de una direccion MAC.
   Si el controlador no conoce la ip del host, entonces retorna None."""
   host_mac_str = str(host_mac)
   if not host_exists(host_mac_str): return None
@@ -271,6 +271,17 @@ def get_host_ip(host_mac):
   if len(ip_addrs.keys()) == 0: return None
   return ip_addrs.keys()[0].toStr()
     
+    
+def get_host_mac(host_ip):
+  """ Obtiene la direccion mac de un host (NO SWITCH) a partir de su IP.
+  Retorna None si el controlador no conoce al host o si la ip del host aun no es conocida."""
+  host_ip_str = str(host_ip)
+  host_keys = hosts.keys()
+  for hk in host_keys:
+    hi = get_host_ip(hk)
+    if host_ip == hi: return hk
+    
+  return None
 
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
@@ -506,6 +517,8 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['firewall_ips'] = firewall_ips
   core.Interactive.variables['mac_entries'] = get_host_tracker_entries
   core.Interactive.variables['host_ip'] = get_host_ip
+  core.Interactive.variables['host_mac'] = get_host_mac
+  
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
   #timeout = min(max(PATH_SETUP_TIME, 5) * 2, 15)
