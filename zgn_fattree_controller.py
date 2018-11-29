@@ -1,3 +1,4 @@
+from pox.lib.addresses import IPAddr, IPAddr6, EthAddr
 from pox.core import core 
 import pox.log.color
 import pox.log
@@ -26,7 +27,7 @@ adj = defaultdict(lambda:defaultdict(lambda:None))
 switch_ids = set()
 # diccionario SWITCH_ID -> Switch (ver clase mas abajo)
 switches = dict()
-# diccionario de tuplas de tipo: HOST_MAC -> (SWITCH_ID , PUERTO_SWITCH)
+# diccionario de tuplas de tipo: HOST_MAC_STRING -> (SWITCH_ID , PUERTO_SWITCH)
 hosts = dict()
 
 # Determinan / ajustan un tiempo de bloqueo de floods. 
@@ -51,6 +52,7 @@ UDP_FIREWALL_THRESHOLD = 100
 # Determina si se debe tener en cuenta el puerto destino udp para activar el FIREWALL
 USE_UDP_PORT_FOR_FIREWALL = False
 
+  
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
   """ Esta funcion encuentra todos los caminos posibles entre dos switches. Los caminos son poblados como un arreglo de arreglos 
@@ -187,12 +189,12 @@ def handle_flow_removed(event):
       log.info("QUITANDO %s DE LISTA NEGRA DE IPs bloqueadas" , str_dst_ip)
       if str_dst_ip in firewall_ips : firewall_ips.remove(str_dst_ip)
   elif is_icmp(match):
-    log.info('SWITCH_%s: FLUJO REMOVIDO DE TIPO ICMP . packet_count: %s' , switch_id, packet_count)
+    log.debug('SWITCH_%s: FLUJO REMOVIDO DE TIPO ICMP . packet_count: %s' , switch_id, packet_count)
   elif is_tcp(match):
     dst_ip = match.get_nw_dst() # Tupla IP , bits_mascara. Ejemplo: (IPAddr('10.0.0.2'), 32)
-    log.info('SWITCH_%s: FLUJO REMOVIDO DE TIPO TCP CON DESTINO IP %s . packet_count: %s' , switch_id, dst_ip , packet_count)
+    log.debug('SWITCH_%s: FLUJO REMOVIDO DE TIPO TCP CON DESTINO IP %s . packet_count: %s' , switch_id, dst_ip , packet_count)
   else:
-    log.info('SWITCH_%s: FLUJO REMOVIDO packet_count: %s' , switch_id , packet_count)
+    log.debug('SWITCH_%s: FLUJO REMOVIDO packet_count: %s' , switch_id , packet_count)
       
 def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None):
   """ Instala un flujo de dopeo de paquetes UDP para un destino determinado """
@@ -226,17 +228,49 @@ def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None
 
 def handle_host_tracker_HostEvent (event):
   """ Listener de eventos tipo HOST NUEVO CONECTADO """
+  
   host_mac = str(event.entry.macaddr)
   switch_id = event.entry.dpid
   switch_port = event.entry.port
   
+  # Supuesto codigo para obtener la ip de un host inmediatamente... no funciona
+  #ipaddr_keys = event.entry.ipAddrs.keys()
+  #ip = None
+  #if len(ipaddr_keys) > 0 :
+  #  ip = ipaddr_keys[0].toStr()
+  
   if host_mac not in hosts:
-    hosts[host_mac] = (switch_id , switch_port)
+    hosts[host_mac] = { "switch_id" : switch_id , "switch_port" : switch_port }
     if switch_id in switches:
       log.info('NUEVO HOST %s CON SWITCH_%s@PORT_%s' , host_mac , switch_id , switch_port)
     else:
       log.warn("Missing switch")
 
+      
+def get_host_tracker_entries():
+  """ Obtiene las entradas de hosts conocidas por el modulo host_tracker """
+  return core.host_tracker.entryByMAC
+
+def host_exists(host_mac):
+  """ Retorna true si un host existe """
+  host_mac_str = str(host_mac)
+  return host_mac_str in hosts
+      
+def get_host_ip(host_mac):
+  """ Funcion que retorna la IP de un host a partir de una direccion MAC.
+  Si el controlador no conoce la ip del host, entonces retorna None."""
+  host_mac_str = str(host_mac)
+  if not host_exists(host_mac_str): return None
+  
+  host_tracker_entries = get_host_tracker_entries()
+  hm = EthAddr(host_mac_str)
+  if hm not in host_tracker_entries: return None
+  
+  ht_entry = host_tracker_entries[hm]
+  ip_addrs = ht_entry.ipAddrs
+  if len(ip_addrs.keys()) == 0: return None
+  return ip_addrs.keys()[0].toStr()
+    
 
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
@@ -244,7 +278,8 @@ class ZgnFattreeController:
   def __init__ (self):  
     # Listen to dependencies
     def startup ():
-      core.openflow.addListeners(self, priority=0)
+      #core.openflow.addListeners(self, priority=0)
+      core.openflow.addListeners(self)
       core.openflow_discovery.addListeners(self)        
       # Listen for flow stats
       core.openflow.addListenerByName("FlowStatsReceived", handle_flow_stats)
@@ -333,7 +368,7 @@ class Switch:
     
     def install_flow(out_port , duration = FLOW_INSTALL_DURATION):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
-      log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
+      log.debug("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
         (self.switch_id,src_mac, in_port, dst_mac, out_port , pkt_type_name))
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match.from_packet(packet, in_port)
@@ -469,7 +504,8 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['stats'] = request_flow_stats
   core.Interactive.variables['hosts'] = hosts
   core.Interactive.variables['firewall_ips'] = firewall_ips
-  
+  core.Interactive.variables['mac_entries'] = get_host_tracker_entries
+  core.Interactive.variables['host_ip'] = get_host_ip
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
   #timeout = min(max(PATH_SETUP_TIME, 5) * 2, 15)
