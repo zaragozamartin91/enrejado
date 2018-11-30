@@ -33,6 +33,8 @@ hosts = dict()
 taken_paths = set()
 # Diccionario de caminos de flujos existentes indexado por flow_key (ver funcion build_flow_key)
 current_paths = dict()
+# Diccionario de cantidad de veces que un camino esta siendo usado indexado por el array string del camino
+current_paths_load = defaultdict(lambda:0)
 
 # Determinan / ajustan un tiempo de bloqueo de floods. 
 # Este tiempo se incrementara cada vez que se detecte un nuevo switch y un nuevo enlace
@@ -58,6 +60,10 @@ USE_UDP_PORT_FOR_FIREWALL = False
 # Flag que determina el tipo de manejo ip a hacer
 HANDLE_IP_COMPLEX = True
 
+def request_all_flow_stats():
+  """ Solicita datos de estadisticas a todos los switches """
+  for s_id in switch_ids:
+    request_flow_stats(s_id)
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
   """ Esta funcion encuentra todos los caminos posibles entre dos switches. Los caminos son poblados como un arreglo de arreglos 
@@ -100,10 +106,13 @@ def find_any_path(curr_switch_id , end_switch_id):
   found_paths = []
   find_switch_path(curr_switch_id , end_switch_id , found_paths)
   #log.info("find_any_path: found_paths = %s" , str(found_paths))
+  shortest_load = 99999999
   shortest_path = None
   for fp in found_paths:
-    if shortest_path is None: shortest_path = fp
-    if len(fp) < len(shortest_path): shortest_path = fp
+    fp_str = str(fp)
+    path_load = current_paths_load[fp_str]
+    if path_load == 0: return fp # si este camino NUNCA fue usado, entonces vamos a usarlo
+    if path_load < shortest_load: shortest_path = fp
   return shortest_path
   
   
@@ -130,9 +139,6 @@ def find_any_path(curr_switch_id , end_switch_id):
 #  msg = of.ofp_stats_request(body=req_body)
 #  con.send(msg)
 
-def request_all_flow_stats():
-  for s_id in switch_ids:
-    request_flow_stats(s_id)
 
 def request_flow_stats(switch_id):
   """ Solicita estadisticas de flujo de un switch. """
@@ -617,6 +623,8 @@ class Switch:
         current_paths[flow_key] = path
         # marco al path encontrado como TOMADO
         taken_paths.add( path_str )
+        # incremento la cantidad de veces que el camino esta siendo usado
+        current_paths_load[path_str] += 1
         # instalo un flujo para forwardear el paquete
         switch_switch_link = get_switch_switch_link(self.switch_id , path)
         if switch_switch_link is not None:
@@ -627,6 +635,7 @@ class Switch:
             log.info("SWITCH_%s: ELIMINANDO PATH %s DE FLUJO %s" , self.switch_id , path_str , flow_key)
             if path_str in taken_paths: taken_paths.remove( path_str )
             if flow_key in current_paths: current_paths.pop( flow_key )
+            current_paths_load[path_str] -= 1
           # despues de un tiempo elimino el path de flujo instalado
           Timer(FLOW_INSTALL_DURATION, remove_taken_path)
           return True
@@ -737,6 +746,7 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['set_ip_complex'] = set_ip_complex
   core.Interactive.variables['taken_paths'] = taken_paths
   core.Interactive.variables['current_paths'] = current_paths
+  core.Interactive.variables['current_paths_load'] = current_paths_load
   
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
