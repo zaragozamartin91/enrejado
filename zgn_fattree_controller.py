@@ -1,4 +1,4 @@
-from pox.lib.addresses import IPAddr, IPAddr6, EthAddr
+from pox.lib.addresses import IPAddr, EthAddr
 from pox.core import core 
 import pox.log.color
 import pox.log
