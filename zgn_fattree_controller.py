@@ -55,7 +55,8 @@ FIREWALL_DURATION = 10
 UDP_FIREWALL_THRESHOLD = 100
 # Determina si se debe tener en cuenta el puerto destino udp para activar el FIREWALL
 USE_UDP_PORT_FOR_FIREWALL = False
-
+# Flag que determina el tipo de manejo ip a hacer
+HANDLE_IP_COMPLEX = False
 
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
@@ -85,20 +86,25 @@ def find_non_taken_path(curr_switch_id , end_switch_id):
   El retorno es un arreglo de SWITCH_IDs , ej: [1,2,4]. Si no existe ningun path disponible, retorna None """
   found_paths = []
   find_switch_path(curr_switch_id , end_switch_id , found_paths)
+  log.info("find_non_taken_path: found_paths = %s" , str(found_paths))
   shortest_path = None
   for fp in found_paths:
     if str(fp) not in taken_paths: 
       if shortest_path is None: shortest_path = fp
       if len(fp) < len(shortest_path): shortest_path = fp
-  return None
+  return shortest_path
   
 def find_any_path(curr_switch_id , end_switch_id):
   """ Obtiene cualquier path de un switch origen a un destino. Si no hay ningun path retorna None. 
   TODO: mejorar este metodo para que retorne paths ALEATORIOS """
   found_paths = []
   find_switch_path(curr_switch_id , end_switch_id , found_paths)
-  if len(found_paths) > 0: return found_paths[0]
-  else: return None
+  log.info("find_any_path: found_paths = %s" , str(found_paths))
+  shortest_path = None
+  for fp in found_paths:
+    if shortest_path is None: shortest_path = fp
+    if len(fp) < len(shortest_path): shortest_path = fp
+  return shortest_path
   
   
 
@@ -252,6 +258,9 @@ def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None
 #  for k in switches.keys():
 #    blackhole_udp_packets (k , duration , udp_dst_ip , udp_dst_port)
 
+def set_ip_complex(enabled = True):
+  global HANDLE_IP_COMPLEX
+  HANDLE_IP_COMPLEX = enabled
 
 def handle_host_tracker_HostEvent (event):
   """ Listener de eventos tipo HOST NUEVO CONECTADO """
@@ -273,6 +282,8 @@ def handle_host_tracker_HostEvent (event):
     else:
       log.warn("Missing switch")
 
+  # TODO: SOLO PARA PRUEBAS... ELIMINAR
+  # if len(hosts) == 11: set_ip_complex(True)
       
 def get_host_tracker_entries():
   """ Obtiene las entradas de hosts conocidas por el modulo host_tracker """
@@ -447,8 +458,9 @@ class Switch:
     
     def install_flow(out_port , duration = FLOW_INSTALL_DURATION):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
-      log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
-        (self.switch_id,src_mac, in_port, dst_mac, out_port , pkt_type_name))
+      if not pkt_is_arp:
+        log.info("SWITCH_%s: Instale un flujo de %s@PUERTO_%i hacia %s@PUERTO_%i de tipo %s" % 
+          (self.switch_id,src_mac, in_port, dst_mac, out_port , pkt_type_name))
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match.from_packet(packet, in_port)
       msg.idle_timeout = duration
@@ -539,66 +551,75 @@ class Switch:
       # OFPFF_CHECK_OVERLAP pide al switch que verifique overlap de reglas de flujo
       msg.flags = of.OFPFF_SEND_FLOW_REM + of.OFPFF_CHECK_OVERLAP
       self.connection.send(msg)
-      
-    def handle_ip():
+    
+    def handle_ip_complex():
       """ Maneja paquetes tipo ip """
       dst_mac_str = str(dst_mac) # obtengo el string de mac destino
+      log.info("SWITCH_%s: Mac destino es %s" , self.switch_id , dst_mac_str)
+      
       host_switch_port = get_host_switch_port(dst_mac_str , self.switch_id)
       # si la mac destino es de un host y este switch esta directamente conectado al mismo, entonces instalo un flujo inmediatamente
       if host_switch_port is not None: 
         log.info('SWITCH_%s: La Mac destino %s corresponde a un host conectado a MI puerto %d!' , self.switch_id , dst_mac_str , host_switch_port)
         return install_flow(host_switch_port)
       
-      weird_scenario = False
+      # TODOOOOOOOOOO : VERIFICAR SI ACASO SE DEBE USAR install_flow EN VEZ DE install_path_flow
+      
+      # verifico si ya existe un path asignado a este flujo
       flow_key = build_flow_key()
       if flow_key in current_paths:
-        # verifico si ya existe un path asignado a este flujo
         path = current_paths[flow_key]
         log.info('SWITCH_%s: el path %s esta asignado al flow_key %s' , self.switch_id , str(path) , flow_key )
         # instalo un flujo para forwardear el paquete
         switch_switch_link = get_switch_switch_link(self.switch_id , path)
         if switch_switch_link is not None:
           out_port = switch_switch_link.port1
-          return install_path_flow(out_port)
+          log.info("SWITCH_%s: El paquete debe salir por mi puerto %d" , self.switch_id , out_port)
+          return install_flow(out_port)
+          #return install_path_flow(out_port)
         else:
-          weird_scenario = True
           log.warn('SWITCH_%s: encontre un path... pero yo no tengo enlace ALGO ESTA MAL' , self.switch_id)
-          
+          return handle_all()
           
       # si llegue a este punto es porque no hay un path asignado al camino indicado... probablemente este switch es de borde
       # debo solicitar un camino libre y asignarlo
-      if not weird_scenario:
-        host = get_host_by_mac(dst_mac)
-        if host is not None:
-          end_switch_id = host['switch_id'] # obtengo el id del switch al cual esta conectado el host destino
-          # busco o bien un camino libre o cualquier camino en caso de no existir ninguno libre
-          path = find_non_taken_path(self.switch_id , end_switch_id)
-          if path is None:
-            path = find_any_path(self.switch_id , end_switch_id)
-          # guardo la asociacion entre la clave del flujo y el path encontrado
-          current_paths[flow_key] = path
-          # marco al path encontrado como TOMADO
-          path_str = str(path)
-          taken_paths.add( path_str )
-          # instalo un flujo para forwardear el paquete
-          switch_switch_link = get_switch_switch_link(self.switch_id , path)
-          if switch_switch_link is not None:
-            out_port = switch_switch_link.port1
-            install_path_flow(out_port)
-          else:
-            log.warn('SWITCH_%s: encontre un path... pero yo no tengo enlace ALGO ESTA MAL' , self.switch_id)
-          
+      host = get_host_by_mac(dst_mac)
+      if host is not None:
+        end_switch_id = host['switch_id'] # obtengo el id del switch al cual esta conectado el host destino
+        # busco o bien un camino libre o cualquier camino en caso de no existir ninguno libre
+        log.info("SWITCH_%s: Busco un path hacia switch %s" , self.switch_id , end_switch_id)
+        path = find_non_taken_path(self.switch_id , end_switch_id)
+        if path is None:
+          path = find_any_path(self.switch_id , end_switch_id)
+        path_str = str(path)
+        log.info("SWITCH_%s: Voy a usar el path %s y se lo asigno al flujo %s" , self.switch_id , path_str , flow_key)
+        # guardo la asociacion entre la clave del flujo y el path encontrado
+        current_paths[flow_key] = path
+        # marco al path encontrado como TOMADO
+        taken_paths.add( path_str )
+        # instalo un flujo para forwardear el paquete
+        switch_switch_link = get_switch_switch_link(self.switch_id , path)
+        if switch_switch_link is not None:
+          out_port = switch_switch_link.port1
+          install_flow(out_port)
+          #return install_path_flow(out_port)
           def remove_taken_path():
             log.info("SWITCH_%s: ELIMINANDO PATH %s DE FLUJO %s" , self.switch_id , path_str , flow_key)
             if path_str in taken_paths: taken_paths.remove( path_str )
             if flow_key in current_paths: current_paths.pop( flow_key )
           # despues de un tiempo elimino el path de flujo instalado
-          Timer(FLOW_INSTALL_DURATION, remove_taken_path, recurring=True)
-        
-        
+          Timer(FLOW_INSTALL_DURATION, remove_taken_path)
+          
+        else:
+          log.warn('SWITCH_%s: encontre un path... pero yo no tengo enlace ALGO ESTA MAL' , self.switch_id)
+          return handle_all()
         
       # condicion fallback ... manejo el paquete como puedo
       handle_all()
+    
+    def handle_ip():
+      if HANDLE_IP_COMPLEX: return handle_ip_complex()
+      else: return handle_all()
     
     def handle_udp():
       """ Maneja paquetes UDP. Si detecta que un destino esta bloqueado por un firewall, descarta el paquete """
@@ -624,6 +645,8 @@ class Switch:
     unknown_pkt = pkt_is_ipv6 or ( icmp_pkt is None and tcp_pkt is None and udp_pkt is None and not pkt_is_arp )
     if unknown_pkt: return handle_unknown()
     
+    # los paquetes ARP los despacho inmediatamente sin crear ni reservar flujos
+    if pkt_is_arp: return handle_all()
     
     log.debug('SWITCH_%s@PORT_%d LLEGO PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
       (self.switch_id,in_port,eth_getNameForType,pkt_type_name,src_mac,dst_mac))
@@ -645,6 +668,7 @@ class Switch:
 
     
 # launch ----------------------------------------------------------------------------------------------------------------------
+
 
 
 def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
@@ -689,7 +713,9 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['host_mac'] = get_host_mac
   core.Interactive.variables['find_switch_path'] = find_switch_path
   core.Interactive.variables['get_switch_switch_link'] = get_switch_switch_link
-  
+  core.Interactive.variables['set_ip_complex'] = set_ip_complex
+  core.Interactive.variables['taken_paths'] = taken_paths
+  core.Interactive.variables['current_paths'] = current_paths
   
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
