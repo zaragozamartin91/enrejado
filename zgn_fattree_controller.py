@@ -32,6 +32,8 @@ hosts = dict()
 # set de paths de switches tomados
 taken_paths = set()
 
+current_paths = dict()
+
 # Determinan / ajustan un tiempo de bloqueo de floods. 
 # Este tiempo se incrementara cada vez que se detecte un nuevo switch y un nuevo enlace
 FLOOD_DELAY_INCREMENT = 0
@@ -79,12 +81,15 @@ def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_pat
   
 
 def find_non_taken_path(curr_switch_id , end_switch_id):
-  """ Obtiene el primer path de switches no tomado """
+  """ Obtiene el primer path de switches no tomado. 
+  El retorno es un arreglo de SWITCH_IDs , ej: [1,2,4]. Si no existe ningun path disponible, retorna None """
   found_paths = []
   find_switch_path(curr_switch_id , end_switch_id , found_paths)
   for fp in found_paths:
     if str(fp) not in taken_paths: return fp
   return None
+  
+
 
 # DEFINO FUNCIONES Y LISTENERS DE ESTADISTICAS DE SWITCHES PARA EVENTUALMENTE ARMAR EL FIREWALL -------------
   
@@ -298,7 +303,14 @@ def get_host_by_ip(host_ip):
   """ Obtiene un objeto tipo host a partir de su ip """
   host_mac = get_host_mac(host_ip)
   if host_mac in hosts: return hosts[host_mac]
-  else return None
+  else: return None
+  
+def get_host_switch_port(host_mac , switch_id):
+  host_mac_str = str(host_mac)
+  if host_mac_str not in hosts: return None
+  host = hosts[host_mac_str]
+  if host['switch_id'] == switch_id: return host['switch_port']
+  else: return None
 
 # CONTROLLER CLASS ----------------------------------------------------------------------------------------
   
@@ -405,7 +417,7 @@ class Switch:
     
     def install_flow(out_port , duration = FLOW_INSTALL_DURATION):
       """ Instala un flujo en el switch del tipo MAC_ORIGEN@PUERTO_ENTRADA -> MAC_DESTINO@PUERTO_SALIDA """
-      log.debug("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
+      log.info("SWITCH_%s: FLUJO INSTALADO %s@PUERTO_%i -> %s@PUERTO_%i DE TIPO %s" % 
         (self.switch_id,src_mac, in_port, dst_mac, out_port , pkt_type_name))
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match.from_packet(packet, in_port)
@@ -474,6 +486,13 @@ class Switch:
       
     def handle_ip():
       """ Maneja paquetes tipo ip """
+      dst_mac_str = str(dst_mac) # obtengo el string de mac destino
+      host_switch_port = get_host_switch_port(dst_mac_str , self.switch_id)
+      # si este switch conoce al host destino mediante su mac, entonces instalo un flujo hacia dicho host
+      if host_switch_port is not None: 
+        log.info('SWITCH_%s: La Mac destino %s corresponde a un host conectado a MI puerto %d!' , self.switch_id , dst_mac_str , host_switch_port)
+        return install_flow(host_switch_port)
+      
       flow_key = build_flow_key()
       src_mac_str = str(src_mac)
       is_srchost_known = src_mac_str in hosts
@@ -482,7 +501,7 @@ class Switch:
       handle_all()
     
     def handle_udp():
-      """ Maneja paquetes UDP. Debe detectar ataques udp e instalar un firewall temporal en el switch """
+      """ Maneja paquetes UDP. Si detecta que un destino esta bloqueado por un firewall, descarta el paquete """
       dstip = ip_pkt.dstip
       str_dst_ip = str(dstip)
       if str_dst_ip in firewall_ips:
@@ -509,6 +528,11 @@ class Switch:
     log.debug('SWITCH_%s@PORT_%d LLEGO PAQUETE TIPO %s::%s MAC_ORIGEN: %s MAC_DESTINO: %s' % 
       (self.switch_id,in_port,eth_getNameForType,pkt_type_name,src_mac,dst_mac))
 
+    
+      
+    # si el mac origen es igual al mac destino entonces dropeo
+    if src_mac == dst_mac: drop()
+      
     if udp_pkt: return handle_udp()
     
     if ip_pkt: return handle_ip()
