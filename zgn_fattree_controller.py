@@ -1,4 +1,4 @@
-from pox.lib.addresses import IPAddr, IPAddr6, EthAddr
+from pox.lib.addresses import IPAddr, EthAddr
 from pox.core import core 
 import pox.log.color
 import pox.log
@@ -130,6 +130,9 @@ def find_any_path(curr_switch_id , end_switch_id):
 #  msg = of.ofp_stats_request(body=req_body)
 #  con.send(msg)
 
+def request_all_flow_stats():
+  for s_id in switch_ids:
+    request_flow_stats(s_id)
 
 def request_flow_stats(switch_id):
   """ Solicita estadisticas de flujo de un switch. """
@@ -712,6 +715,7 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['switch_ids'] = switch_ids
   core.Interactive.variables['switches'] = switches
   core.Interactive.variables['stats'] = request_flow_stats
+  core.Interactive.variables['all_stats'] = request_all_flow_stats
   core.Interactive.variables['hosts'] = hosts
   core.Interactive.variables['firewall_ips'] = firewall_ips
   core.Interactive.variables['mac_entries'] = get_host_tracker_entries
