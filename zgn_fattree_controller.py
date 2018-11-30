@@ -99,7 +99,7 @@ def find_any_path(curr_switch_id , end_switch_id):
   TODO: mejorar este metodo para que retorne paths ALEATORIOS """
   found_paths = []
   find_switch_path(curr_switch_id , end_switch_id , found_paths)
-  log.info("find_any_path: found_paths = %s" , str(found_paths))
+  #log.info("find_any_path: found_paths = %s" , str(found_paths))
   shortest_path = None
   for fp in found_paths:
     if shortest_path is None: shortest_path = fp
