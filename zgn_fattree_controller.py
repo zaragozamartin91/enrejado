@@ -56,7 +56,7 @@ UDP_FIREWALL_THRESHOLD = 100
 # Determina si se debe tener en cuenta el puerto destino udp para activar el FIREWALL
 USE_UDP_PORT_FOR_FIREWALL = False
 # Flag que determina el tipo de manejo ip a hacer
-HANDLE_IP_COMPLEX = False
+HANDLE_IP_COMPLEX = True
 
 
 def find_switch_path(curr_switch_id , end_switch_id , found_paths = [], curr_path = []):
@@ -86,7 +86,7 @@ def find_non_taken_path(curr_switch_id , end_switch_id):
   El retorno es un arreglo de SWITCH_IDs , ej: [1,2,4]. Si no existe ningun path disponible, retorna None """
   found_paths = []
   find_switch_path(curr_switch_id , end_switch_id , found_paths)
-  log.info("find_non_taken_path: found_paths = %s" , str(found_paths))
+  #log.info("find_non_taken_path: found_paths = %s" , str(found_paths))
   shortest_path = None
   for fp in found_paths:
     if str(fp) not in taken_paths: 
@@ -559,6 +559,9 @@ class Switch:
       dst_mac_str = str(dst_mac) # obtengo el string de mac destino
       log.info("SWITCH_%s: Mac destino es %s" , self.switch_id , dst_mac_str)
       
+      # si el host destino es desconocido, entonces me falta conocer a mas hosts y manejo el paquete como un switch bobo
+      if dst_mac_str not in hosts: return handle_all()
+      
       host_switch_port = get_host_switch_port(dst_mac_str , self.switch_id)
       # si la mac destino es de un host y este switch esta directamente conectado al mismo, entonces instalo un flujo inmediatamente
       if host_switch_port is not None: 
@@ -566,8 +569,6 @@ class Switch:
         return install_flow(host_switch_port)
       
       # TODOOOOOOOOOO : VERIFICAR SI ACASO SE DEBE USAR install_flow EN VEZ DE install_path_flow
-      
-      # BUG DETECTADO! EL flow_key DE RESPUESTAS ESTA COINCIDIENDO CON EL DE REQUESTS!!!
       
       # verifico si ya existe un path asignado a este flujo
       flow_key = build_flow_key()
