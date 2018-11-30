@@ -451,8 +451,10 @@ class Switch:
       """ Crea la clave de un flujo a partir de campos disponibles del paquete procesado """
       flow_key = pkt_type_name + '#'
       if ip_pkt: flow_key += str(ip_pkt.srcip) + 'to' + str(ip_pkt.dstip)
-      if tcp_pkt: flow_key += ':' + str(tcp_pkt.dstport)
+      if tcp_pkt: flow_key += ':' + str(tcp_pkt.dstport) + "-" + str(tcp_pkt.ACK)
+      # TODO ... PARA UDP SE DEBEN CONSTRUIR FLUJOS DISTINTOS PARA LA IDA Y LA VUELTA... CONSIDERAR USAR LA MAC
       if udp_pkt: flow_key += ':' + str(udp_pkt.dstport)
+      if icmp_pkt: flow_key += '-' + str(icmp_pkt.type)
       log.info("SWITCH_%s: flow_key = %s" , self.switch_id , flow_key)
       return flow_key
     
@@ -565,6 +567,8 @@ class Switch:
       
       # TODOOOOOOOOOO : VERIFICAR SI ACASO SE DEBE USAR install_flow EN VEZ DE install_path_flow
       
+      # BUG DETECTADO! EL flow_key DE RESPUESTAS ESTA COINCIDIENDO CON EL DE REQUESTS!!!
+      
       # verifico si ya existe un path asignado a este flujo
       flow_key = build_flow_key()
       if flow_key in current_paths:
@@ -609,6 +613,7 @@ class Switch:
             if flow_key in current_paths: current_paths.pop( flow_key )
           # despues de un tiempo elimino el path de flujo instalado
           Timer(FLOW_INSTALL_DURATION, remove_taken_path)
+          return True
           
         else:
           log.warn('SWITCH_%s: encontre un path... pero yo no tengo enlace ALGO ESTA MAL' , self.switch_id)
