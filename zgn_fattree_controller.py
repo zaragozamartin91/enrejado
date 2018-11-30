@@ -204,8 +204,6 @@ def handle_flow_stats (event):
 #  msg.command = of.OFPFC_DELETE
 #  switches[switch_id].connection.send(msg)
 
-# blacklist o lista negra de IPs bloqueadas por firewall
-firewall_ips = set()
 
 def handle_flow_removed(event):
   """ Listener que maneja eliminaciones de flujos en switches. Escucha eventos tipo FlowRemoved """
@@ -215,15 +213,16 @@ def handle_flow_removed(event):
 
   if is_udp(match): 
     dst_ip = match.get_nw_dst() # Tupla IP , bits_mascara. Ejemplo: (IPAddr('10.0.0.2'), 32)
-    log.info('SWITCH_%s: FLUJO REMOVIDO DE TIPO UDP CON DESTINO IP %s . packet_count: %s' , switch_id, dst_ip , packet_count)
+    log.info('SWITCH_%s: FLUJO REMOVIDO DE TIPO UDP CON DESTINO IP %s . packet_count: %s' , switch_id, str(dst_ip[0]) , packet_count)
     if packet_count > UDP_FIREWALL_THRESHOLD:
       # Si la cantidad de paquetes UDP supera el THRESHOLD establecido -> instalo un blackhole firewall
       blackhole_udp_packets(switch_id , FIREWALL_DURATION , dst_ip)
     else:
       # Si la cantidad de paquetes UDP para un destino baja luego de un tiempo, entonces se lo quita del blacklist de destinos bloqueados
       str_dst_ip = str(dst_ip[0])
-      log.info("QUITANDO %s DE LISTA NEGRA DE IPs bloqueadas" , str_dst_ip)
-      if str_dst_ip in firewall_ips : firewall_ips.remove(str_dst_ip)
+      switch = switches[switch_id]
+      switch.remove_firewall_ip(str_dst_ip)
+
   elif is_icmp(match):
     log.debug('SWITCH_%s: FLUJO REMOVIDO DE TIPO ICMP . packet_count: %s' , switch_id, packet_count)
   elif is_tcp(match):
@@ -236,7 +235,8 @@ def blackhole_udp_packets (switch_id , duration , udp_dst_ip , udp_dst_port=None
   """ Instala un flujo de dopeo de paquetes UDP para un destino determinado """
   # NOTA: ESTA FUNCION INSTALA UN FIREWALL TIPO BLACKHOLE EN UN SOLO SWITCH... SE DEBE CONSIDERAR SI ACASO EL FIREWALL DEBE INSTALARSE EN TODOS LOS SWITCHES AL MISMO TIEMPO...
   str_dst_ip = str(udp_dst_ip[0])
-  firewall_ips.add(str_dst_ip)
+  switch = switches[switch_id]
+  switch.add_firewall_ip(str_dst_ip)
   log.info('SWITCH_%s: INSTALANDO FIREWALL DE PAQUETES CON DESTINO %s ' , switch_id , str_dst_ip )
   msg = of.ofp_flow_mod()
   if USE_UDP_PORT_FOR_FIREWALL:
@@ -416,11 +416,23 @@ class Switch:
     # Agrego listeners de conexion (como PacketIn)
     self.connection.addListeners(self)
     switches[dpid] = self
+    # Cada switch tiene su propia BLACKLIST de firewalled-ips
+    self.firewall_ips = set()
     
   
   def get_ports(self):
     return self.connection.ports
     
+    
+  def add_firewall_ip(self , ip_str):
+    """ Agrega un ip string al set de ips bloqueads x firewall """
+    self.firewall_ips.add(ip_str)
+  
+  def remove_firewall_ip(self , ip_str):
+    """ Elimina un ip string del set de ips bloqueads x firewall """
+    if ip_str in self.firewall_ips: 
+      log.info("SWITCH_%s: QUITANDO %s DE LISTA NEGRA DE IPs bloqueadas" , self.switch_id ,ip_str)
+      self.firewall_ips.remove(ip_str)
     
   def _handle_PacketIn (self, event):
     packet_in = event.ofp # objeto EVENTO de tipo PACKET_IN.
@@ -634,7 +646,7 @@ class Switch:
       """ Maneja paquetes UDP. Si detecta que un destino esta bloqueado por un firewall, descarta el paquete """
       dstip = ip_pkt.dstip
       str_dst_ip = str(dstip)
-      if str_dst_ip in firewall_ips:
+      if str_dst_ip in self.firewall_ips:
         log.info('SWITCH_%s PAQUETES CON DESTINO %s SIGUEN BLOQUEADOS... REALIZANDO DROP' , self.switch_id , str_dst_ip)
         drop()
         return
@@ -717,7 +729,6 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['stats'] = request_flow_stats
   core.Interactive.variables['all_stats'] = request_all_flow_stats
   core.Interactive.variables['hosts'] = hosts
-  core.Interactive.variables['firewall_ips'] = firewall_ips
   core.Interactive.variables['mac_entries'] = get_host_tracker_entries
   core.Interactive.variables['host_ip'] = get_host_ip
   core.Interactive.variables['host_mac'] = get_host_mac
