@@ -60,6 +60,11 @@ USE_UDP_PORT_FOR_FIREWALL = False
 # Flag que determina el tipo de manejo ip a hacer
 HANDLE_IP_COMPLEX = True
 
+def set_udp_firewall_thresh(value = 100):
+  """ Establece el valor limite de cantidad de paquetes UDP por flujo para la activacion del firewall """
+  global UDP_FIREWALL_THRESHOLD
+  UDP_FIREWALL_THRESHOLD = value
+
 def request_all_flow_stats():
   """ Solicita datos de estadisticas a todos los switches """
   for s_id in switch_ids:
@@ -750,6 +755,7 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   core.Interactive.variables['taken_paths'] = taken_paths
   core.Interactive.variables['current_paths'] = current_paths
   core.Interactive.variables['current_paths_load'] = current_paths_load
+  core.Interactive.variables['set_udp_firewall_thresh'] = set_udp_firewall_thresh
   
   
   # AVERIGUAR PARA QUE SIRVE WaitingPath EN l2_multi
