@@ -111,8 +111,9 @@ def find_any_path(curr_switch_id , end_switch_id):
   for fp in found_paths:
     fp_str = str(fp)
     path_load = current_paths_load[fp_str]
-    if path_load == 0: return fp # si este camino NUNCA fue usado, entonces vamos a usarlo
-    if path_load < shortest_load: shortest_path = fp
+    if shortest_path is None: shortest_path = fp
+    # si encuentro un path mas corto que el actual Y QUE ademas esta en desuso, entonces lo priorizo
+    if len(fp) < len(shortest_path) and path_load <= shortest_load: shortest_path = fp
   return shortest_path
   
   
