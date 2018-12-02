@@ -715,16 +715,16 @@ def launch (flow_duration = 10 , udp_fwall_pkts = 100 , fwall_duration = 10):
   
   # Los parametros de configuracion pueden pasarse como --nombre_parametro=VALOR inmediatamente luego del nombre de ESTE MODULO.
   global FLOW_INSTALL_DURATION
-  FLOW_INSTALL_DURATION = flow_duration
+  FLOW_INSTALL_DURATION = int(flow_duration)
   log.info("DURACION DE FLUJOS: %s SEGUNDOS" , FLOW_INSTALL_DURATION)
   
   global UDP_FIREWALL_THRESHOLD
-  UDP_FIREWALL_THRESHOLD = udp_fwall_pkts
+  UDP_FIREWALL_THRESHOLD = int(udp_fwall_pkts)
   log.info("CANTIDAD DE PAQUETES UDP LIMITE P/FIREWALL: %s PAQUETES" , UDP_FIREWALL_THRESHOLD)
   
   # Duracion base del firewall. Se renueva cada FIREWALL_DURATION segundos (si es necesario).
   global FIREWALL_DURATION
-  FIREWALL_DURATION = fwall_duration
+  FIREWALL_DURATION = int(fwall_duration)
   log.info("DURACION DEL FIREWALL: %s SEGUNDOS" , FIREWALL_DURATION)
   
   pox.openflow.discovery.launch()
